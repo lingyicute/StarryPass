@@ -21,6 +21,26 @@
  */
 
 import { argon2id, argon2idAsync } from '@noble/hashes/argon2.js';
+import hashwasmArgon2Module from '../vendor/hash-wasm/argon2.umd.min.cjs';
+
+/* Argon2id providers
+ * -------------------
+ * Primary:  vendored hash-wasm (WASM, ~4.8x faster) — the fork branch
+ *           adding the `ad` option StarryPass needs; see vendor/hash-wasm/PROVENANCE.md.
+ * Fallback: @noble/hashes (pure JS) — always correct, slower.
+ *
+ * The WASM provider is enabled ONLY after the boot self-test computes
+ * the RFC 9106 §5.3 vector with BOTH providers and they agree byte for
+ * byte; any mismatch disables it for the session (noble still passes
+ * the same KAT, so derivation continues correctly either way).
+ */
+const hashwasmArgon2id =
+    hashwasmArgon2Module && typeof hashwasmArgon2Module.argon2id === 'function'
+        ? hashwasmArgon2Module.argon2id
+        : hashwasmArgon2Module && hashwasmArgon2Module.default && typeof hashwasmArgon2Module.default.argon2id === 'function'
+            ? hashwasmArgon2Module.default.argon2id
+            : null;
+let wasmProviderEnabled = false;
 
 /* ------------------------------------------------------------------ *
  * Mode / tier tables (must match the v2 spec exactly)                 *
@@ -131,6 +151,20 @@ async function hmacSha256(keyBytes, dataBytes) {
  * which yields periodically so the page stays responsive.
  */
 function argon2idDerive({ password, salt, ad, memoryKiB, passes, parallelism, tagLength }, inWorker) {
+    if (wasmProviderEnabled && hashwasmArgon2id) {
+        return Promise.resolve(
+            hashwasmArgon2id({
+                password,
+                salt,
+                ad,
+                iterations: passes,
+                memorySize: memoryKiB,
+                parallelism,
+                hashLength: tagLength,
+                outputType: 'binary',
+            }),
+        ).then((out) => (out instanceof Uint8Array ? out : new Uint8Array(out)));
+    }
     const opts = {
         t: passes,
         m: memoryKiB,
@@ -307,6 +341,24 @@ function runSelfTest(inWorker) {
             for (let i = 0; i < 32; i++) {
                 if (tagK[i] !== expectedA2[i]) throw new Error('KAT_ARGON2ID_FAILED');
             }
+
+            // 3. Cross-provider gate: the vendored hash-wasm (WASM) fast
+            //    path is enabled only if it reproduces the same vector
+            //    byte for byte. Mismatch = silent drop to noble only.
+            if (hashwasmArgon2id) {
+                try {
+                    const hwTag = await hashwasmArgon2id({
+                        password: p, salt: s, secret: k, ad: x,
+                        parallelism: 4, iterations: 3, memorySize: 32,
+                        hashLength: 32, outputType: 'binary',
+                    });
+                    const hwBytes = hwTag instanceof Uint8Array ? hwTag : new Uint8Array(hwTag);
+                    wasmProviderEnabled = hwBytes.length ===32 && constantTimeEqual(hwBytes, tagK);
+                    zeroize(hwBytes);
+                } catch {
+                    wasmProviderEnabled = false;
+                }
+            }
             zeroize(tagK);
 
             // 2. RFC 5869 TC1 HMAC/SHA-256 KAT (first 8 bytes of PRK).
@@ -423,6 +475,8 @@ export function spv2CoreFactory(workerGlobal, _forcePureJs) {
     const api = {
         derive: (req) => enqueue(() => deriveOnce(req)),
         wipeSession: () => { enqueue(async () => { wipeSession(); }) ; },
+        /* Which Argon2id provider won the boot cross-KAT (diagnostics). */
+        provider: () => (wasmProviderEnabled ? 'hash-wasm' : 'noble-hashes'),
     };
 
     if (inWorker) {
