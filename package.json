@@ -8,8 +8,9 @@
   "private": true,
   "scripts": {
     "build": "esbuild src/spv2-core.mjs --bundle --format=iife --platform=browser --minify --legal-comments=eof --banner:js='/*! StarryPass v2 production core — AGPL-3.0 — bundles @noble/hashes (MIT), see THIRD_PARTY_NOTICES.md */' --outfile=assets/js/spv2-core.js",
-    "test": "node tests/verify_spv2.mjs && node tests/verify_bundle.mjs",
-    "test:golden": "node tests/verify_spv2.mjs && node tests/verify_golden.mjs && node tests/verify_bundle.mjs"
+    "test": "node tests/verify_strength.mjs && node tests/verify_spv2.mjs && node tests/verify_bundle.mjs",
+    "test:golden": "node tests/verify_strength.mjs && node tests/verify_spv2.mjs && node tests/verify_golden.mjs && node tests/verify_bundle.mjs",
+    "test:strength": "node tests/verify_strength.mjs"
   },
   "dependencies": {
     "@noble/hashes": "2.4.0"
