@@ -5,6 +5,12 @@
 > 派生规范与 v2 逐位兼容；密码学原语全部采用成熟、经广泛审计的标准实现。
 > 在原版派生出的每一个密码，在这里都一个字节不差地复现。
 
+### 简单方便防破解，不一样的密码管理工具
+
+同一主密码 + 站点代号，本地确定性生成高熵密码。
+
+![image](https://raw.githubusercontent.com/lingyicute/StarryPass/main/banner.jpg)
+
 ## 🤔 为什么有两个版本？
 
 本项目是 StarryPass 确定性密码生成器的**生产级版本**。
@@ -27,9 +33,7 @@
 | 会话随机数 | `getRandomValues` + `Math.random` 回退 | 强制 `crypto.getRandomValues`，**移除弱回退** |
 | 规范逻辑（NFC 规范化、盐构造、HKDF 流布局、无偏拒绝采样、会话缓存） | — | 按 v2 规范逐行移植（这部分是*规格*，不是密码学原语） |
 
-**应用层不自行实现密码学原语。** 本版本源码中 `src/spv2-core.mjs` 的
-全部底层加密操作只由三类调用构成：`crypto.subtle.*`、`crypto.getRandomValues`、
-`@noble/hashes` 的 `argon2id`。
+**应用层不自行实现密码学原语。** 本版本源码中 `src/spv2-core.mjs` 的全部底层加密操作只由三类调用构成：`crypto.subtle.*`、`crypto.getRandomValues`、`@noble/hashes` 的 `argon2id`。
 
 ## ✅ 兼容性验证
 
@@ -48,8 +52,7 @@ npm test           # 向量 + 构建产物测试（快）
 npm run test:golden # 再加 44 条黄金用例（完整，约 1 分钟）
 ```
 
-`tests/generate_golden.mjs` 记录了黄金集的生成方式，
-以便日后复核出处。
+`tests/generate_golden.mjs` 记录了黄金集的生成方式，以便日后复核出处。
 
 ## ⚡ 性能（数字随硬件浮动）
 
@@ -61,10 +64,8 @@ npm run test:golden # 再加 44 条黄金用例（完整，约 1 分钟）
 
 纯 JS 路径相较于 WASM 的耗时差异源于运行时的执行模型不同。交互与调度层通过以下机制保障流畅体验：
 
-- 派生始终在 **Worker** 中执行（本地回退路径用 `argon2idAsync`，按 30 ms
-  让出事件循环，进度条保持动画）；
-- **单槽会话缓存**语义不变：主密码 / 代号 / 档位不变时，轮换号、长度、
-  模式的任何改动都**不再触发 Argon2**；
+- 派生始终在 **Worker** 中执行（本地回退路径用 `argon2idAsync`，按 30 ms 让出事件循环，进度条保持动画）；
+- **单槽会话缓存**语义不变：主密码 / 代号 / 档位不变时，轮换号、长度、模式的任何改动都**不再触发 Argon2**；
 - 输入防抖 280 ms 与乱序应答丢弃逻辑不变。
 
 ## 📁 目录结构
@@ -80,8 +81,7 @@ scripts/subset_font.py  # 字体子集化脚本
 THIRD_PARTY_NOTICES.md  # @noble/hashes (MIT) 许可证
 ```
 
-构建：`npm run build`（esbuild，产物已入库；CI 会重构建并 `git diff`
-校验漂移，防止改了源码忘发布产物）。
+构建：`npm run build`（esbuild，产物已入库；CI 会重构建并 `git diff` 校验漂移，防止改了源码忘发布产物）。
 
 ## 🔐 密码学（派生规范 —— 与 v2 完全一致）
 
