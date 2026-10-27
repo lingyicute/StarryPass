@@ -1,4 +1,4 @@
-const TIMESTAMP = "1793145601";
+const TIMESTAMP = "1793191800"; // 2026-10-27 WASM fast-path release
 const VERSION = "spv2-precache-v" + TIMESTAMP;
 const RUNTIME = "spv2-runtime-v" + TIMESTAMP;
 const PRECACHE_URLS = [

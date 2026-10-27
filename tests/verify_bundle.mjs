@@ -52,4 +52,13 @@ else if (again.cached !== true) { console.error('FAIL expected cached=true'); fa
 else console.log(`PASS session cache reuse (${hitMs}ms, no Argon2 re-run)`);
 
 if (failed) process.exit(1);
+// The WASM fast path must have passed its boot cross-KAT in this
+// environment (vendored provider is always present in the repo); a
+// silent drop to noble-only would mean the bundle's provider gate broke.
+const provider = engine.provider();
+if (provider !== 'hash-wasm') {
+    console.error(`FAIL: expected Argon2id provider 'hash-wasm', got '${provider}'`);
+    process.exit(1);
+}
+console.log(`PASS provider gate: ${provider}`);
 console.log(`ALL ${vectors.length} VECTORS PASSED THROUGH THE BUILT BUNDLE`);
