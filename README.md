@@ -68,6 +68,27 @@ npm run test:golden # 再加 44 条黄金用例（完整，约 1 分钟）
 - **单槽会话缓存**语义不变：主密码 / 代号 / 档位不变时，轮换号、长度、模式的任何改动都**不再触发 Argon2**；
 - 输入防抖 280 ms 与乱序应答丢弃逻辑不变。
 
+### ⚡ WASM 快速路径（已启用：vendored hash-wasm + 启动交叉门控）
+
+上表的 noble 数字是**回退路径**。生产核心现在默认走 **vendored
+hash-wasm（WASM，含 `ad` 补丁分支）**，见 `vendor/hash-wasm/PROVENANCE.md`
+（上游 PR 已提交待审，作者沉寂故先 vendor）：
+
+| 档位 | hash-wasm (WASM) | noble (纯 JS 回退) | 倍差 |
+| --- | --- | --- | --- |
+| standard (64 MiB, t=3) | ~210–285 ms | ~1016–1420 ms | ~5× |
+| paranoid (256 MiB, t=4) | ~1109 ms | ~5210 ms | 4.7× |
+
+安全门控（不是简单 feature-detect）：
+
+- **每次会话启动自检**用两个提供方各算一遍 RFC 9106 §5.3 向量
+  （含 secret + ad），**逐位一致才启用 WASM 路径**；任何异常/不一致
+  静默退回 noble——派生正确性永远不依赖单一代码库。
+- `npm run test:parity` 离线再验 4 组生产参数逐位一致 + 基准；
+- `provider()` 诊断接口存在，bundle 测试断言其为 `hash-wasm`，
+  防止 CI 中静默退化。
+- 端到端效果：黄金集测试 27.9 s → 8.1 s。
+
 ## 📁 目录结构
 
 ```
@@ -76,9 +97,10 @@ service-worker.js       # 缓存控制
 assets/js/spv2-core.js  # 发行产物：esbuild 打包的生产核心（含 @noble/hashes）
 assets/js/spv2-worker.js# importScripts 装载核心（与原版一致）
 src/spv2-core.mjs       # 核心源码（可读版，构建入口）
-tests/                  # 向量、黄金集、三套验证脚本
+vendor/hash-wasm/       # vendored hash-wasm@4.12.0 + ad 补丁构建（PROVENANCE.md）
+tests/                  # 向量、黄金集、验证脚本与跨库一致性测试
 scripts/subset_font.py  # 字体子集化脚本
-THIRD_PARTY_NOTICES.md  # @noble/hashes (MIT) 许可证
+THIRD_PARTY_NOTICES.md  # @noble/hashes + hash-wasm (均 MIT) 许可证
 ```
 
 构建：`npm run build`（esbuild，产物已入库；CI 会重构建并 `git diff` 校验漂移，防止改了源码忘发布产物）。
@@ -119,4 +141,5 @@ along with this program. If not, see https://www.gnu.org/licenses.
 
 ## 🗂️ Third Party License
 
-`@noble/hashes` 为 MIT 许可证，全文见 `THIRD_PARTY_NOTICES.md`。
+`@noble/hashes` 与 `hash-wasm`（vendored 构建）均为 MIT 许可证，
+全文见 `THIRD_PARTY_NOTICES.md` 与 `vendor/hash-wasm/LICENSE`。
