@@ -659,6 +659,7 @@
             background: var(--md-sys-color-surface-container-highest);
             color: var(--md-sys-color-on-surface-variant);
         }
+        .chip:disabled { opacity: .38; pointer-events: none; }
         .chip[aria-pressed="true"] {
             background: var(--md-sys-color-secondary-container);
             color: var(--md-sys-color-on-secondary-container);
@@ -880,7 +881,6 @@
         (function () {
             'use strict';
 
-            // Roots from StarryPassPoC ab373e8fb57d0f24f2bad48253ef8ea3e20430e4.
             var WEAK_ROOTS = {
                 '123':1,'1234':1,'12345':1,'123456':1,'1234567':1,'12345678':1,
                 '123456789':1,'1234567890':1,'12345678910':1,'0123456789':1,
@@ -941,13 +941,16 @@
                 var m = String(master || '').normalize('NFC');
                 var c = String(code || '').trim().normalize('NFC');
                 if (!m || !c) return { level: 0, label: '—', bits: 0 };
+                // 仅为输出空间的理论上界，不是精确熵；字符类别约束会进一步缩小空间。
+                var poolSize = mode === 'pin' ? 10 : (mode === 'alnum' ? 62 : 77);
+                var outBits = Math.max(0, Number(length) || 0) * Math.log2(poolSize);
                 var mLower = m.toLowerCase(), cLower = c.toLowerCase();
                 if (cLower.length >= 2 && mLower.indexOf(cLower) !== -1)
-                    return { level: 1, label: '弱 · 主密码勿含代号', bits: 16 };
+                    return { level: 1, label: '弱 · 主密码勿含代号', bits: Math.round(Math.min(16, outBits)) };
                 if (/^(19|20)\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])$/.test(m))
-                    return { level: 1, label: '弱 · 勿用纯日期', bits: 15 };
+                    return { level: 1, label: '弱 · 勿用纯日期', bits: Math.round(Math.min(15, outBits)) };
                 if (hasWeakRoot(mLower))
-                    return { level: 1, label: '弱 · 含常见弱口令', bits: 18 };
+                    return { level: 1, label: '弱 · 含常见弱口令', bits: Math.round(Math.min(18, outBits)) };
 
                 var cps = Array.from(m);
                 var hasLower = false, hasUpper = false, hasDigit = false, hasSym = false, i, ch, cp;
@@ -977,10 +980,12 @@
                     seen[ch] = count + 1;
                 }
                 if (tier === 'paranoid') bits += 3;
-                if (mode === 'pin' && length <= 8) {
-                    if (bits < 44) return { level: 1, label: '弱 · 主密码过短', bits: Math.round(bits) };
-                    return { level: 2, label: 'PIN · 依赖终端限次', bits: Math.round(bits) };
+                if (mode === 'pin') {
+                    if (bits < 44) return { level: 1, label: '弱 · 主密码过短', bits: Math.round(Math.min(bits, outBits)) };
+                    // PIN 的安全性由终端限次决定，等级保持"中"，但比特数如实反映输出空间
+                    return { level: 2, label: 'PIN · 依赖终端限次', bits: Math.round(Math.min(bits, outBits)) };
                 }
+                bits = Math.min(bits, outBits);
                 if (bits < 44) return { level: 1, label: '弱 · 建议加长主密码', bits: Math.round(bits) };
                 if (bits < 64) return { level: 2, label: '中 · 建议用长句口令', bits: Math.round(bits) };
                 if (bits < 86) return { level: 3, label: '强 · 抗集群暴力破解', bits: Math.round(bits) };
@@ -1007,16 +1012,15 @@
             var counterInput = document.getElementById('counter-input');
 
             var state = { length: 16, mode: 'full', counter: 1, tier: 'standard' };
-            var lastPwd = null, lastLevel = -1, deriveId = 0, debounceTimer = null;
-            var worker = null, localEngine = null, inflight = false;
+            var deriveId = 0, debounceTimer = null;
+            var worker = null, localEngine = null, currentPayload = null;
+            var pendingPayload = null, busy = false, watchdogTimer = null, workerAllowed = true;
 
-            try {
-                worker = new Worker('./assets/js/spv2-worker.js');
-            } catch (e) {
-                worker = null;
-            }
-            if (!worker && typeof spv2CoreFactory === 'function') {
-                localEngine = spv2CoreFactory(null, false);
+            function ensureLocalEngine() {
+                if (!localEngine && typeof spv2CoreFactory === 'function') {
+                    localEngine = spv2CoreFactory(null, false);
+                }
+                return localEngine;
             }
 
             var ICONS = {
@@ -1045,7 +1049,8 @@
             function initTheme() {
                 var saved = null;
                 try { saved = localStorage.getItem('sp-theme'); } catch (e) {}
-                applyTheme(saved || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
+                var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+                applyTheme(saved === 'dark' || saved === 'light' ? saved : (prefersDark ? 'dark' : 'light'));
             }
             themeToggle.addEventListener('click', function () {
                 var next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
@@ -1069,20 +1074,16 @@
             }
             document.getElementById('len-chips').addEventListener('click', function (e) {
                 var btn = e.target.closest('[data-len]'); if (!btn) return;
+                if (btn.disabled) return;
                 state.length = parseInt(btn.getAttribute('data-len'), 10);
-                setChipGroup(this, 'data-len', state.length);
-                pwdLength.textContent = state.length + ' 位';
+                syncLengthChips();
                 scheduleRefresh();
             });
             document.getElementById('mode-chips').addEventListener('click', function (e) {
                 var btn = e.target.closest('[data-mode]'); if (!btn) return;
                 state.mode = btn.getAttribute('data-mode');
                 setChipGroup(this, 'data-mode', state.mode);
-                if (state.mode === 'pin' && state.length > 8) {
-                    state.length = 6;
-                    setChipGroup(document.getElementById('len-chips'), 'data-len', 16);
-                    pwdLength.textContent = '6 位';
-                }
+                syncLengthChips();
                 scheduleRefresh();
             });
             document.getElementById('tier-chips').addEventListener('click', function (e) {
@@ -1091,12 +1092,12 @@
                 setChipGroup(this, 'data-tier', state.tier);
                 scheduleRefresh();
             });
+            function readCounter() {
+                return Math.max(1, Math.min(9999, parseInt(counterInput.value, 10) || 1));
+            }
             function clampCounter() {
-                var n = parseInt(counterInput.value, 10);
-                if (!n || n < 1) n = 1;
-                if (n > 9999) n = 9999;
-                counterInput.value = String(n);
-                state.counter = n;
+                state.counter = readCounter();
+                counterInput.value = String(state.counter);
             }
             document.getElementById('ctr-dec').addEventListener('click', function () {
                 counterInput.value = String(Math.max(1, (parseInt(counterInput.value, 10) || 1) - 1));
@@ -1106,6 +1107,7 @@
                 counterInput.value = String(Math.min(9999, (parseInt(counterInput.value, 10) || 1) + 1));
                 clampCounter(); scheduleRefresh();
             });
+            counterInput.addEventListener('input', function () { state.counter = readCounter(); scheduleRefresh(); });
             counterInput.addEventListener('change', function () { clampCounter(); scheduleRefresh(); });
 
             function setStrength(est) {
@@ -1117,82 +1119,216 @@
                 deriveBar.classList.toggle('is-busy', on);
             }
 
+            /* PIN 保留原有的 6 位策略；不再覆盖非 PIN 模式所选的长度。 */
+            function effectiveLength() {
+                return state.mode === 'pin' ? 6 : state.length;
+            }
+            function syncLengthChips() {
+                var pin = state.mode === 'pin';
+                // 长度芯片仅适用于 full/alnum；PIN 下禁用且不高亮，避免显示相互矛盾。
+                document.querySelectorAll('#len-chips .chip').forEach(function (btn) {
+                    btn.disabled = pin;
+                    btn.setAttribute('aria-pressed', String(!pin && btn.getAttribute('data-len') === String(state.length)));
+                });
+                pwdLength.textContent = effectiveLength() + ' 位';
+            }
+
             function showEmpty(placeholder) {
-                lastPwd = null;
                 output.textContent = placeholder;
                 output.classList.add('password--empty');
                 copyBtn.disabled = true;
+                clearTimeout(copyResetTimer);
+                copyBtn.classList.remove('is-copied');
+                copyLabel.textContent = '复制密码';
+                copyBtn.querySelector('svg path').setAttribute('d', ICONS.copy);
                 setStrength({ level: 0, label: '—' });
-                lastLevel = -1;
                 setBusy(false);
             }
 
-            function applyPassword(pwd, master, code) {
-                lastPwd = pwd;
+            function errorText(err) {
+                var code = err && err.message ? err.message : 'DERIVE_ERROR';
+                if (code === 'EMPTY_INPUT') return '请填写完整的主密码和代号';
+                if (code === 'MEMORY_LIMIT') return '内存不足，请改用「标准」档';
+                return '派生失败，请重试';
+            }
+
+            function validPassword(pwd, payload) {
+                if (typeof pwd !== 'string' || !pwd.length || pwd.length !== payload.length) return false;
+                var pool = payload.mode === 'pin' ? '0123456789'
+                    : 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+                if (payload.mode === 'full') pool += '!@#$%^&*()-_=+?';
+                for (var i = 0; i < pwd.length; i++) {
+                    if (pool.indexOf(pwd.charAt(i)) === -1) return false;
+                }
+                return true;
+            }
+
+            function applyPassword(pwd, payload) {
+                if (!validPassword(pwd, payload)) {
+                    showEmpty(errorText(null));
+                    return;
+                }
                 output.textContent = pwd;
                 output.classList.remove('password--empty');
                 copyBtn.disabled = false;
-                var est = estimateCrackResistance(master, code, state.tier, state.mode, state.length);
-                setStrength(est);
-                lastLevel = est.level;
-                setBusy(false);
+                pwdLength.textContent = pwd.length + ' 位';
+                // 用"产生这条口令的输入"和"实际输出长度"来评级，避免状态漂移
+                setStrength(estimateCrackResistance(payload.master, payload.code, payload.tier, payload.mode, pwd.length));
             }
 
-            function derive(master, code, id) {
-                var payload = {
-                    id: id, type: 'derive', master: master, code: code,
-                    tier: state.tier, counter: state.counter, length: state.mode === 'pin' ? Math.min(state.length, 8) : state.length,
-                    mode: state.mode
-                };
-                if (state.mode === 'pin') pwdLength.textContent = payload.length + ' 位';
-                else pwdLength.textContent = state.length + ' 位';
+            function clearWatchdog() {
+                clearTimeout(watchdogTimer);
+                watchdogTimer = null;
+            }
 
+            function isCurrent(payload) {
+                return payload && payload.id === deriveId
+                    && payload.master === masterInput.value && payload.code === codeInput.value
+                    && payload.tier === state.tier && payload.mode === state.mode
+                    && payload.counter === state.counter && payload.length === effectiveLength();
+            }
+
+            function stopWorker() {
+                var target = worker;
+                worker = null;
+                currentPayload = null;
+                busy = false;
+                clearWatchdog();
+                if (target) {
+                    target.onmessage = target.onerror = target.onmessageerror = null;
+                    try { target.terminate(); } catch (err) {}
+                }
+            }
+
+            /* 单槽合并队列：忙时只保留最新请求；过期回包不得改变当前任务的状态。 */
+            function dispatch(payload) {
+                if (!isCurrent(payload)) return;
+                startWorker();
+                busy = true;
+                currentPayload = payload;
+                setBusy(true);
                 if (worker) {
-                    inflight = true;
-                    setBusy(true);
-                    worker.postMessage(payload);
+                    var target = worker;
+                    try {
+                        target.postMessage(payload);
+                    } catch (err) {
+                        fallbackToLocal();
+                        return;
+                    }
+                    clearWatchdog();
+                    watchdogTimer = setTimeout(function () {
+                        if (worker !== target || currentPayload !== payload) return;
+                        var next = pendingPayload;
+                        pendingPayload = null;
+                        stopWorker();  // 先终止卡住的计算，不能把新任务继续排到同一个 Worker 后面。
+                        if (isCurrent(next)) dispatch(next);
+                        else if (isCurrent(payload)) showEmpty('派生超时，请重试');
+                        else setBusy(!!debounceTimer);
+                    }, 60000);
                     return;
                 }
-                /* Production core is async (Web Crypto): mirror the worker path. */
-                inflight = true;
-                setBusy(true);
-                localEngine.derive(payload).then(function (res) {
-                    inflight = false;
-                    if (id === deriveId) applyPassword(res.password, master, code);
-                }, function () {
-                    inflight = false;
-                    if (id === deriveId) showEmpty('派生失败，请重试');
-                });
+                try {
+                    var engine = ensureLocalEngine();
+                    if (!engine) throw new Error('ENGINE_UNAVAILABLE');
+                    // Production Web Crypto is asynchronous. Match the task on
+                    // completion as well as its input, including after reset/pagehide.
+                    Promise.resolve(engine.derive(payload)).then(function (res) {
+                        if (isCurrent(payload)) applyPassword(res && res.password, payload);
+                    }).catch(function (err) {
+                        if (isCurrent(payload)) showEmpty(errorText(err));
+                    }).finally(function () {
+                        finishOne(payload);
+                    });
+                } catch (err) {
+                    if (isCurrent(payload)) showEmpty(errorText(err));
+                    finishOne(payload);
+                }
             }
 
-            if (worker) {
-                worker.onmessage = function (ev) {
-                    inflight = false;
+            function finishOne(payload) {
+                // An old async local task must never finish a replacement task.
+                if (currentPayload !== payload) return;
+                busy = false;
+                currentPayload = null;
+                clearWatchdog();
+                var next = pendingPayload;
+                pendingPayload = null;
+                if (isCurrent(next)) { dispatch(next); return; }
+                setBusy(!!debounceTimer);
+            }
+
+            function requestDerive(payload) {
+                if (busy) { pendingPayload = payload; setBusy(true); return; }
+                dispatch(payload);
+            }
+
+            function fallbackToLocal() {
+                stopWorker();
+                workerAllowed = false;
+                pendingPayload = null;
+                showSnackbar('兼容模式已启用（派生稍慢）');
+                refresh();
+            }
+
+            function startWorker() {
+                if (worker || !workerAllowed) return;
+                var target;
+                try {
+                    target = new Worker('./assets/js/spv2-worker.js');
+                } catch (err) {
+                    workerAllowed = false;
+                    showSnackbar('兼容模式已启用（派生稍慢）');
+                    return;
+                }
+                worker = target;
+                target.onmessage = function (ev) {
+                    if (worker !== target) return;
                     var data = ev.data || {};
-                    if (data.id !== deriveId) return;
-                    if (data.ok) applyPassword(data.password, masterInput.value, codeInput.value);
-                    else showEmpty(data.error === 'EMPTY_INPUT' ? '请填写完整的主密码和代号' : '派生失败，请重试');
+                    if (data.type === 'wiped') return;
+                    var payload = currentPayload;
+                    if (!payload || data.id !== payload.id) return;
+                    try {
+                        if (isCurrent(payload)) {
+                            if (data.ok === true) applyPassword(data.password, payload);
+                            else showEmpty(errorText({ message: data.error }));
+                        }
+                    } finally {
+                        finishOne(payload);
+                    }
+                };
+                target.onerror = target.onmessageerror = function (ev) {
+                    if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
+                    if (worker === target) fallbackToLocal();
                 };
             }
+            startWorker();
 
-            function refresh() {
+            function invalidateResult() {
+                clearTimeout(debounceTimer);
+                debounceTimer = null;
+                deriveId += 1;  // 输入/策略变化时立即作废，不能等 280 ms 防抖结束。
+                pendingPayload = null;
                 var master = masterInput.value, code = codeInput.value;
                 var hasInput = master !== '' && code.trim() !== '';
                 clearCodeBtn.hidden = code === '';
                 clearCodeBtn.disabled = code === '';
                 resetBtn.disabled = !master && !code;
-                if (!hasInput) {
-                    showEmpty(master || code ? '请填写完整的主密码和代号' : '请输入主密码和代号');
-                    copyBtn.disabled = true;
-                    return;
-                }
-                deriveId += 1;
-                derive(master, code, deriveId);
+                pwdLength.textContent = effectiveLength() + ' 位';
+                showEmpty(hasInput ? '生成中…' : (master || code ? '请填写完整的主密码和代号' : '请输入主密码和代号'));
+                setBusy(hasInput);
+                return hasInput;
+            }
+
+            function refresh() {
+                if (!invalidateResult()) return;
+                requestDerive({
+                    id: deriveId, type: 'derive', master: masterInput.value, code: codeInput.value,
+                    tier: state.tier, counter: state.counter, length: effectiveLength(), mode: state.mode
+                });
             }
 
             function scheduleRefresh() {
-                clearTimeout(debounceTimer);
-                debounceTimer = setTimeout(refresh, 280);
+                if (invalidateResult()) debounceTimer = setTimeout(refresh, 280);
             }
             masterInput.addEventListener('input', scheduleRefresh);
             codeInput.addEventListener('input', scheduleRefresh);
@@ -1211,6 +1347,7 @@
                 return Promise.resolve(fallbackCopy(text));
             }
             function fallbackCopy(text) {
+                var active = document.activeElement;
                 var ta = document.createElement('textarea');
                 ta.value = text; ta.setAttribute('readonly', '');
                 ta.style.position = 'fixed'; ta.style.top = '-1000px'; ta.style.opacity = '0';
@@ -1218,17 +1355,20 @@
                 var ok = false;
                 try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
                 ta.remove();
+                if (active && typeof active.focus === 'function') active.focus({ preventScroll: true });
                 return ok;
             }
             var copyResetTimer = null;
             copyBtn.addEventListener('click', function () {
                 if (copyBtn.disabled) return;
-                copyText(output.textContent).then(function (ok) {
+                var text = output.textContent, copiedId = deriveId;
+                copyText(text).then(function (ok) {
                     if (!ok) { showSnackbar('复制失败，请手动选择密码'); return; }
+                    showSnackbar('密码已复制到剪贴板');
+                    if (copiedId !== deriveId || copyBtn.disabled) return;
                     copyBtn.classList.add('is-copied');
                     copyLabel.textContent = '已复制';
                     copyBtn.querySelector('svg path').setAttribute('d', ICONS.check);
-                    showSnackbar('密码已复制到剪贴板');
                     clearTimeout(copyResetTimer);
                     copyResetTimer = setTimeout(function () {
                         copyBtn.classList.remove('is-copied');
@@ -1239,8 +1379,11 @@
             });
 
             function wipe() {
-                if (worker) worker.postMessage({ type: 'wipe', id: 0 });
-                else if (localEngine) localEngine.wipeSession();
+                deriveId += 1;
+                clearTimeout(debounceTimer); debounceTimer = null;
+                pendingPayload = null;
+                stopWorker();
+                if (localEngine) localEngine.wipeSession();
             }
             resetBtn.addEventListener('click', function () {
                 masterInput.value = ''; codeInput.value = '';
@@ -1250,6 +1393,7 @@
                 codeInput.value = ''; refresh(); codeInput.focus();
             });
             window.addEventListener('pagehide', wipe);
+            window.addEventListener('pageshow', function (event) { if (event.persisted) refresh(); });
 
             document.querySelectorAll('.ripple').forEach(function (btn) {
                 btn.addEventListener('pointerdown', function (e) {
@@ -1266,6 +1410,7 @@
             });
 
             initTheme();
+            syncLengthChips();
             refresh();
 
             if ('serviceWorker' in navigator && location.protocol === 'https:') {
