@@ -15,4 +15,10 @@
 
 `python3 tests/verify_browser.py` 同时运行 `verify_network_timeout.py`：真实 HTTPS、Service Worker、CacheStorage 与受控小资源，覆盖响应头停发、核心正文停发、HTML 导航正文停发和无缓存慢响应，另验证正常 Response 元数据与晚到响应不污染缓存。使用真实 SW 时钟，不将页面虚拟时钟误当作 SW 时钟。传输夹具不替代真实密码学/兼容性检查；原四路固定答案及完整发布门禁仍需通过。
 
-只涉及 SW 传输及测试，不改变派生规范、KDF 成本、评分模型或 UI 布局。
+上述网络修复只涉及 SW 传输及测试，不改变派生规范、KDF 成本、评分模型或 UI 布局。
+
+## 关联的移动端点击高亮调整
+
+另行移植 PoC `8f399621636e327b65335a5d5c70026111b3af36`：仅在 `html` 添加继承的 `-webkit-tap-highlight-color: transparent`，将原来按钮已有的浏览器原生高亮抑制覆盖到输入框、summary 等元素。既有自定义 ripple、`:active`、3px `:focus-visible`、UI 布局、内嵌字体和 autocomplete 不变。
+
+浏览器回归增加 10 项，检查移动触屏模拟下继承后的透明值、真实 tap 的功能及自定义波纹、输入聚焦，以及真实 Tab 导航的可见焦点和按下态。只实测 Chromium 触屏模拟，不冒充 Safari/iPhone 真机覆盖。
