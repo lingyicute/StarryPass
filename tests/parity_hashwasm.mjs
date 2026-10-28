@@ -1,41 +1,14 @@
-/* Cross-implementation parity test for the OPTIONAL hash-wasm fast path.
- *
- * Status: the StarryPass production core ships @noble/hashes as its
- * Argon2id provider. A pending upstream PR (hash-wasm #feat/
- * argon2-associated-data, branch prepared by lingyicute) adds the `ad`
- * option that StarryPass v2 requires; once merged and installed, this
- * script verifies the two providers agree byte-for-byte and benchmarks
- * them. It SKIPS cleanly while hash-wasm is not installed.
- *
- * Run:  npm run test:parity
- * Dev override:  HASHWASM_DIST=/path/to/hash-wasm/dist/index.esm.js node tests/parity_hashwasm.mjs
+/* Compare the exact vendored provider shipped in the production bundle to
+ * the pinned @noble/hashes implementation. Missing providers are test failures,
+ * never a green SKIP. HASHWASM_DIST remains a developer-only comparison override.
  */
-import { createRequire } from 'module';
-
+import { argon2id as noble } from '@noble/hashes/argon2.js';
+import vendor from '../vendor/hash-wasm/argon2.umd.min.cjs';
 const enc = new TextEncoder();
-
-async function loadProviders() {
-    let hw = null;
-    if (process.env.HASHWASM_DIST) {
-        hw = (await import(process.env.HASHWASM_DIST)).argon2id;
-    } else {
-        try { hw = (await import('hash-wasm')).argon2id; } catch { hw = null; }
-    }
-    if (!hw) {
-        // Vendored patched build shipped with this repository (see
-        // vendor/hash-wasm/PROVENANCE.md) — the default once integrated.
-        try {
-            const { createRequire } = await import('module');
-            const req = createRequire(import.meta.url);
-            const m = req('../vendor/hash-wasm/argon2.umd.min.cjs');
-            hw = m && m.argon2id ? m.argon2id : (m && m.default && m.default.argon2id) || null;
-        } catch { hw = null; }
-    }
-    if (!hw) return null;
-    const require = createRequire(import.meta.url);
-    const noble = require('@noble/hashes/argon2.js').argon2id;
-    return { hw, noble };
-}
+const hw = process.env.HASHWASM_DIST
+    ? (await import(process.env.HASHWASM_DIST)).argon2id
+    : vendor.argon2id;
+if (typeof hw !== 'function') throw new Error('Vendored Argon2id provider missing');
 
 /* Salt framing replicated from src/spv2-core.mjs (spec is frozen and is
  * itself guarded by tests/golden.json — both providers receive the same
@@ -51,13 +24,6 @@ async function buildSalt(code, tierId) {
     saltIn[saltIn.length - 1] = tierId;
     return new Uint8Array(await crypto.subtle.digest('SHA-256', saltIn));
 }
-
-const providers = await loadProviders();
-if (!providers) {
-    console.log('SKIP: hash-wasm not installed (pending upstream ad support — see README)');
-    process.exit(0);
-}
-const { hw, noble } = providers;
 
 // 1. RFC 9106 §5.3 KAT with secret + ad
 const kat = await hw({
