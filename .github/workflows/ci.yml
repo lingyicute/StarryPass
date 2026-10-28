@@ -1,10 +1,12 @@
 name: CI
 
 on:
+  # main is verified by the Pages workflow before publishing the same commit.
   push:
-    branches: ["main"]
+    branches: ["master"]
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -19,17 +21,33 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 20
+          node-version: "24"
           cache: npm
       - run: npm ci
       - name: Rebuild bundle and fail on drift
-        # assets/js/spv2-core.js 是发行产物且已入库；源码改了却忘记
-        # 重新构建会让线上跑旧核心，这里直接让 CI 变红。
         run: |
           npm run build
           git diff --exit-code assets/js/spv2-core.js
-      - name: Compat tests (original vectors + golden set + built bundle)
+      - name: Core, UI, SW, original vectors, bundle and golden answers
         run: npm run test:golden
+      - name: Source/bundle and WASM/noble immutable compatibility matrix
+        run: npm run test:compat
+      - name: Vendored Argon2id versus noble on production parameters
+        run: npm run test:parity
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Install test-only Chromium dependencies
+        run: |
+          python -m pip install playwright==1.64.1
+          python -m playwright install --with-deps chromium
+      - name: Async Web Crypto, Worker, clipboard and HTTPS offline regressions
+        run: python tests/verify_browser.py
