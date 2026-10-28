@@ -10,10 +10,10 @@
  *                                       secret + associated data)
  *   CSPRNG ........... crypto.getRandomValues
  *
- * Everything else (canonicalisation, salt framing, HKDF stream layout,
- * zero-bias rejection synthesis, session cache) is *specification logic*
- * ported verbatim from the original spv2-core.js so that every existing
- * user derives byte-identical passwords. The contract is enforced by
+ * Canonicalisation, salt framing, HKDF stream layout and synthesis follow
+ * the original v2 specification. Async cache/lifecycle hardening preserves
+ * byte-identical passwords for existing normal inputs. The contract is
+ * enforced by
  * tests/vectors.json (original vectors) and tests/golden.json (golden set
  * generated with the original implementation).
  *
@@ -27,7 +27,7 @@ import hashwasmArgon2Module from '../vendor/hash-wasm/argon2.umd.min.cjs';
  * -------------------
  * Primary:  vendored hash-wasm (WASM, ~4.8x faster) — the fork branch
  *           adding the `ad` option StarryPass needs; see vendor/hash-wasm/PROVENANCE.md.
- * Fallback: @noble/hashes (pure JS) — always correct, slower.
+ * Fallback: @noble/hashes (pure JS) — separately KAT-gated, slower.
  *
  * The WASM provider is enabled ONLY after the boot self-test computes
  * the RFC 9106 §5.3 vector with BOTH providers and they agree byte for
@@ -142,8 +142,27 @@ async function hmacSha256(keyBytes, dataBytes) {
     return new Uint8Array(sig);
 }
 
+function validateSessionKey(output) {
+    // The frozen protocol requires a 32-byte binary tag. In particular,
+    // Uint8Array(32) must never reinterpret a numeric provider error as a key.
+    let key;
+    if (output instanceof Uint8Array) key = output;
+    else if (output instanceof ArrayBuffer) key = new Uint8Array(output);
+    else {
+        if (ArrayBuffer.isView(output)) {
+            zeroize(new Uint8Array(output.buffer, output.byteOffset, output.byteLength));
+        }
+        throw new Error('INVALID_KDF_OUTPUT');
+    }
+    if (key.length !== 32) {
+        zeroize(key);
+        throw new Error('INVALID_KDF_OUTPUT');
+    }
+    return key;
+}
+
 /**
- * Argon2id v1.3 via @noble/hashes.
+ * Argon2id v1.3 via gated WASM or the @noble/hashes fallback.
  * `secret` is intentionally never set (v2 uses an empty secret);
  * `ad` carries the domain-separation string exactly as the original did.
  * In a dedicated worker we run the synchronous variant (the worker is
@@ -163,7 +182,7 @@ function argon2idDerive({ password, salt, ad, memoryKiB, passes, parallelism, ta
                 hashLength: tagLength,
                 outputType: 'binary',
             }),
-        ).then((out) => (out instanceof Uint8Array ? out : new Uint8Array(out)));
+        ).then(validateSessionKey);
     }
     const opts = {
         t: passes,
@@ -173,9 +192,10 @@ function argon2idDerive({ password, salt, ad, memoryKiB, passes, parallelism, ta
         version: 0x13,
         personalization: ad,
     };
-    return inWorker
+    const pending = inWorker
         ? Promise.resolve(argon2id(password, salt, opts))
         : argon2idAsync(password, salt, { ...opts, asyncTick: 30 });
+    return Promise.resolve(pending).then(validateSessionKey);
 }
 
 /* ------------------------------------------------------------------ *
@@ -184,32 +204,36 @@ function argon2idDerive({ password, salt, ad, memoryKiB, passes, parallelism, ta
 
 async function buildSalt(codeBytes, tierId) {
     const tierByte = new Uint8Array([tierId]);
-    const saltIn = concatBytes([DOMAIN_SALT, lenPrefixed(codeBytes), tierByte]);
-    const s = await sha256(saltIn);
-    zeroize(saltIn);
-    return s;
+    const codeFrame = lenPrefixed(codeBytes);
+    let saltIn;
+    try {
+        saltIn = concatBytes([DOMAIN_SALT, codeFrame, tierByte]);
+        return await sha256(saltIn);
+    } finally {
+        zeroize(saltIn);
+        zeroize(codeFrame);
+        zeroize(tierByte);
+    }
 }
 
 /* ------------------------------------------------------------------ *
  * Stage 2 — session cache (same HMAC-over-random-nonce tag as v2)     *
  * ------------------------------------------------------------------ */
 
-let sessionNonce = null;
-
-function getSessionNonce() {
-    if (!sessionNonce) {
-        sessionNonce = new Uint8Array(32);
-        globalThis.crypto.getRandomValues(sessionNonce);
-    }
-    return sessionNonce;
-}
-
-async function computeSessionTag(masterBytes, codeBytes, tierId) {
+async function computeSessionTag(masterBytes, codeBytes, tierId, nonce) {
     const tierByte = new Uint8Array([tierId]);
-    const msg = concatBytes([DOMAIN_CACHE, lenPrefixed(masterBytes), lenPrefixed(codeBytes), tierByte]);
-    const mac = await hmacSha256(getSessionNonce(), msg);
-    zeroize(msg);
-    return mac;
+    const masterFrame = lenPrefixed(masterBytes);
+    let codeFrame, msg;
+    try {
+        codeFrame = lenPrefixed(codeBytes);
+        msg = concatBytes([DOMAIN_CACHE, masterFrame, codeFrame, tierByte]);
+        return await hmacSha256(nonce, msg);
+    } finally {
+        zeroize(masterFrame);
+        zeroize(codeFrame);
+        zeroize(msg);
+        zeroize(tierByte);
+    }
 }
 
 /* ------------------------------------------------------------------ *
@@ -243,9 +267,17 @@ class HkdfStream {
                 this.ikmKey,
                 this.blockIdx * 32 * 8
             );
-            // Keep only the most recent 32-byte block (T(blockIdx)).
-            this.buf = new Uint8Array(bits).slice(-32);
-            this.pos = 0;
+            // deriveBits also returns all preceding blocks: erase that full
+            // native result and the replaced block, not just the last slice.
+            const raw = new Uint8Array(bits);
+            try {
+                const next = raw.slice(-32);
+                zeroize(this.buf);
+                this.buf = next;
+                this.pos = 0;
+            } finally {
+                zeroize(raw);
+            }
         }
         return this.buf[this.pos++];
     }
@@ -261,6 +293,7 @@ class HkdfStream {
     dispose() {
         zeroize(this.buf);
         this.buf = new Uint8Array(0);
+        zeroize(this.info);
         this.info = null;
         this.ikmKey = null;
     }
@@ -272,49 +305,53 @@ class HkdfStream {
 
 async function synthesizePassword(sk, codeBytes, counter, length, modeName) {
     const modeSpec = MODES[modeName] || MODES.full;
-
     const meta = new Uint8Array(7);
     writeLE32(meta, 0, counter >>> 0);
     writeLE16(meta, 4, length & 0xffff);
     meta[6] = modeSpec.id;
-    const info = concatBytes([DOMAIN_EXPAND, meta, lenPrefixed(codeBytes)]);
+    const codeFrame = lenPrefixed(codeBytes);
+    let info, stream;
+    try {
+        info = concatBytes([DOMAIN_EXPAND, meta, codeFrame]);
+        stream = new HkdfStream(info);
+        await stream.init(sk);
+        const pool = modeSpec.pool;
+        const reqClasses = length >= modeSpec.req.length ? modeSpec.req : [];
+        let result = null;
 
-    const stream = new HkdfStream(info);
-    await stream.init(sk);
-
-    const pool = modeSpec.pool;
-    const reqClasses = length >= modeSpec.req.length ? modeSpec.req : [];
-    let result = null;
-
-    for (let attempt = 0; attempt < 128; attempt++) {
-        const chars = new Array(length);
-        for (let i = 0; i < length; i++) chars[i] = pool.charAt(await stream.uniformInt(pool.length));
-        const candidate = chars.join('');
-        let ok = true;
-        for (const cls of reqClasses) {
-            let found = false;
-            for (let k = 0; k < candidate.length; k++) {
-                if (cls.indexOf(candidate.charAt(k)) !== -1) { found = true; break; }
+        for (let attempt = 0; attempt < 128; attempt++) {
+            const chars = new Array(length);
+            for (let i = 0; i < length; i++) chars[i] = pool.charAt(await stream.uniformInt(pool.length));
+            const candidate = chars.join('');
+            let ok = true;
+            for (const cls of reqClasses) {
+                let found = false;
+                for (let k = 0; k < candidate.length; k++) {
+                    if (cls.indexOf(candidate.charAt(k)) !== -1) { found = true; break; }
+                }
+                if (!found) { ok = false; break; }
             }
-            if (!found) { ok = false; break; }
+            if (ok) { result = candidate; break; }
         }
-        if (ok) { result = candidate; break; }
-    }
 
-    if (!result) {
-        const arr = [];
-        for (const cls of reqClasses) arr.push(cls.charAt(await stream.uniformInt(cls.length)));
-        while (arr.length < length) arr.push(pool.charAt(await stream.uniformInt(pool.length)));
-        for (let s = length - 1; s > 0; s--) {
-            const j = await stream.uniformInt(s + 1);
-            const tmp = arr[s]; arr[s] = arr[j]; arr[j] = tmp;
+        if (!result) {
+            const arr = [];
+            for (const cls of reqClasses) arr.push(cls.charAt(await stream.uniformInt(cls.length)));
+            while (arr.length < length) arr.push(pool.charAt(await stream.uniformInt(pool.length)));
+            for (let s = length - 1; s > 0; s--) {
+                const j = await stream.uniformInt(s + 1);
+                const tmp = arr[s]; arr[s] = arr[j]; arr[j] = tmp;
+            }
+            result = arr.join('');
         }
-        result = arr.join('');
-    }
 
-    zeroize(info);
-    stream.dispose();
-    return result;
+        return result;
+    } finally {
+        if (stream) stream.dispose();
+        zeroize(info);
+        zeroize(codeFrame);
+        zeroize(meta);
+    }
 }
 
 /* ------------------------------------------------------------------ *
@@ -344,7 +381,7 @@ function runSelfTest(inWorker) {
 
             // 3. Cross-provider gate: the vendored hash-wasm (WASM) fast
             //    path is enabled only if it reproduces the same vector
-            //    byte for byte. Mismatch = silent drop to noble only.
+            //    byte for byte. Mismatch disables the fast path.
             if (hashwasmArgon2id) {
                 try {
                     const hwTag = await hashwasmArgon2id({
@@ -352,12 +389,15 @@ function runSelfTest(inWorker) {
                         parallelism: 4, iterations: 3, memorySize: 32,
                         hashLength: 32, outputType: 'binary',
                     });
-                    const hwBytes = hwTag instanceof Uint8Array ? hwTag : new Uint8Array(hwTag);
-                    wasmProviderEnabled = hwBytes.length ===32 && constantTimeEqual(hwBytes, tagK);
+                    const hwBytes = validateSessionKey(hwTag);
+                    wasmProviderEnabled = constantTimeEqual(hwBytes, tagK);
                     zeroize(hwBytes);
                 } catch {
                     wasmProviderEnabled = false;
                 }
+            }
+            if (!wasmProviderEnabled) {
+                console.warn('StarryPass: WASM provider unavailable; using noble-hashes.');
             }
             zeroize(tagK);
 
@@ -371,6 +411,7 @@ function runSelfTest(inWorker) {
             }
             zeroize(prk);
         })().catch((err) => {
+            wasmProviderEnabled = false;
             selfTestPromise = null; // allow retry on transient failure
             throw err;
         });
@@ -383,9 +424,10 @@ async function argon2idDeriveWithKey(password, salt, key, ad, inWorker) {
         t: 3, m: 32, p: 4, dkLen: 32, version: 0x13,
         key, personalization: ad,
     };
-    return inWorker
+    const pending = inWorker
         ? Promise.resolve(argon2id(password, salt, opts))
         : argon2idAsync(password, salt, { ...opts, asyncTick: 30 });
+    return Promise.resolve(pending).then(validateSessionKey);
 }
 
 /* ------------------------------------------------------------------ *
@@ -395,13 +437,22 @@ async function argon2idDeriveWithKey(password, salt, key, ad, inWorker) {
 function canonicalizeInputs(req) {
     const masterNorm = String(req.master || '').normalize('NFC');
     const codeNorm   = String(req.code || '').trim().normalize('NFC');
-    const masterBytes = encoder.encode(masterNorm);
-    const codeBytes   = encoder.encode(codeNorm);
-    const tierSpec = TIERS[req.tier] || TIERS.standard;
+    // Keep the production golden-set fallback contract; never select a
+    // prototype property such as constructor/__proto__ as a mode or tier.
+    const tierSpec = Object.prototype.hasOwnProperty.call(TIERS, req.tier) ? TIERS[req.tier] : TIERS.standard;
     const counter = Math.max(1, Math.min(9999, parseInt(req.counter, 10) || 1));
     const length  = Math.max(4, Math.min(64, parseInt(req.length, 10) || 16));
-    const mode    = MODES[req.mode] ? req.mode : 'full';
-    return { masterBytes, codeBytes, tierSpec, counter, length, mode };
+    const mode = Object.prototype.hasOwnProperty.call(MODES, req.mode) ? req.mode : 'full';
+    let masterBytes, codeBytes;
+    try {
+        masterBytes = encoder.encode(masterNorm);
+        codeBytes = encoder.encode(codeNorm);
+        return { masterBytes, codeBytes, tierSpec, counter, length, mode };
+    } catch (err) {
+        zeroize(masterBytes);
+        zeroize(codeBytes);
+        throw err;
+    }
 }
 
 /* ------------------------------------------------------------------ *
@@ -412,56 +463,81 @@ export function spv2CoreFactory(workerGlobal, _forcePureJs) {
     const inWorker = !!(workerGlobal && typeof workerGlobal.postMessage === 'function');
 
     let cachedTag = null;
-    let cachedSk  = null;
-    let queue = Promise.resolve();   // serialises derive/wipe (async safety)
+    let cachedSk = null;
+    let sessionNonce = null;       // private to this engine, like its cache
+    let generation = 0;
+    let queue = Promise.resolve(); // serialises derive/wipe (async safety)
 
-    function wipeSession() {
-        if (cachedTag) { zeroize(cachedTag); cachedTag = null; }
-        if (cachedSk)  { zeroize(cachedSk);  cachedSk  = null; }
-        if (sessionNonce) { zeroize(sessionNonce); sessionNonce = null; }
+    function getSessionNonce() {
+        if (!sessionNonce) {
+            const candidate = new Uint8Array(32);
+            try {
+                // Preserve production's mandatory CSPRNG policy. Publish only
+                // after success: an exception must never leave a zero/partial key.
+                globalThis.crypto.getRandomValues(candidate);
+                sessionNonce = candidate;
+            } catch (err) {
+                zeroize(candidate);
+                throw new Error('RNG_UNAVAILABLE');
+            }
+        }
+        return sessionNonce;
     }
 
-    async function deriveOnce(req) {
-        await runSelfTest(inWorker);
+    function wipeSession() {
+        zeroize(cachedTag); cachedTag = null;
+        zeroize(cachedSk); cachedSk = null;
+        zeroize(sessionNonce); sessionNonce = null;
+    }
 
-        const inp = canonicalizeInputs(req);
-        if (!inp.masterBytes.length || !inp.codeBytes.length) {
+    function assertCurrent(epoch) {
+        if (epoch !== generation) throw new Error('SESSION_WIPED');
+    }
+
+    async function deriveOnce(req, epoch, inputError) {
+        let inp, reqTag, salt, sk;
+        let usedCache = false, completed = false;
+        try {
+            assertCurrent(epoch);
+            await runSelfTest(inWorker);
+            assertCurrent(epoch);
+            if (inputError) throw inputError.error;
+            inp = canonicalizeInputs(req);
+            if (!inp.masterBytes.length || !inp.codeBytes.length) throw new Error('EMPTY_INPUT');
+            reqTag = await computeSessionTag(inp.masterBytes, inp.codeBytes, inp.tierSpec.id, getSessionNonce());
+            assertCurrent(epoch);
+            if (cachedTag && cachedSk && constantTimeEqual(reqTag, cachedTag)) {
+                sk = cachedSk;
+                usedCache = true;
+            } else {
+                salt = await buildSalt(inp.codeBytes, inp.tierSpec.id);
+                assertCurrent(epoch);
+                sk = await argon2idDerive({
+                    password: inp.masterBytes, salt, ad: DOMAIN_AD,
+                    memoryKiB: inp.tierSpec.memoryKiB, passes: inp.tierSpec.passes,
+                    parallelism: inp.tierSpec.parallelism, tagLength: 32,
+                }, inWorker);
+                assertCurrent(epoch);
+            }
             zeroize(inp.masterBytes);
-            zeroize(inp.codeBytes);
-            throw new Error('EMPTY_INPUT');
-        }
-
-        const reqTag = await computeSessionTag(inp.masterBytes, inp.codeBytes, inp.tierSpec.id);
-
-        let sk = null;
-        let usedCache = false;
-        if (cachedTag && cachedSk && constantTimeEqual(reqTag, cachedTag)) {
-            sk = cachedSk;
-            usedCache = true;
+            const pwd = await synthesizePassword(sk, inp.codeBytes, inp.counter, inp.length, inp.mode);
+            assertCurrent(epoch);
+            // A failed/stale derivation must not publish key material to cache.
+            if (!usedCache) {
+                zeroize(cachedTag);
+                zeroize(cachedSk);
+                cachedTag = reqTag; reqTag = null;
+                cachedSk = sk;
+            }
+            completed = true;
+            return { password: pwd, cached: usedCache };
+        } finally {
+            if (inp) { zeroize(inp.masterBytes); zeroize(inp.codeBytes); }
             zeroize(reqTag);
-        } else {
-            const salt = await buildSalt(inp.codeBytes, inp.tierSpec.id);
-            const fresh = await argon2idDerive({
-                password: inp.masterBytes,
-                salt,
-                ad: DOMAIN_AD,
-                memoryKiB: inp.tierSpec.memoryKiB,
-                passes: inp.tierSpec.passes,
-                parallelism: inp.tierSpec.parallelism,
-                tagLength: 32,
-            }, inWorker);
             zeroize(salt);
-            if (cachedTag) zeroize(cachedTag);
-            if (cachedSk) zeroize(cachedSk);
-            cachedSk = fresh;
-            cachedTag = reqTag;
-            sk = fresh;
+            if (sk && sk !== cachedSk) zeroize(sk);
+            if (!completed) wipeSession();
         }
-
-        zeroize(inp.masterBytes);
-        const pwd = await synthesizePassword(sk, inp.codeBytes, inp.counter, inp.length, inp.mode);
-        zeroize(inp.codeBytes);
-        return { password: pwd, cached: usedCache };
     }
 
     /* All operations run through one queue so a wipe can never zeroise
@@ -473,8 +549,24 @@ export function spv2CoreFactory(workerGlobal, _forcePureJs) {
     }
 
     const api = {
-        derive: (req) => enqueue(() => deriveOnce(req)),
-        wipeSession: () => { enqueue(async () => { wipeSession(); }) ; },
+        derive: (req) => {
+            const epoch = generation;
+            let snapshot, inputError;
+            try {
+                // Capture the six request fields now, not after an async KAT
+                // or earlier queued job. Reusing a caller's request object
+                // must not silently change a previously requested password.
+                snapshot = { master: req.master, code: req.code, tier: req.tier,
+                    counter: req.counter, length: req.length, mode: req.mode };
+            } catch (error) {
+                inputError = { error }; // preserve Promise/FIFO and error cleanup
+            }
+            return enqueue(() => deriveOnce(snapshot, epoch, inputError));
+        },
+        wipeSession: () => {
+            generation++; // immediately invalidate active and already queued work
+            return enqueue(async () => { wipeSession(); });
+        },
         /* Which Argon2id provider won the boot cross-KAT (diagnostics). */
         provider: () => (wasmProviderEnabled ? 'hash-wasm' : 'noble-hashes'),
     };
@@ -482,21 +574,20 @@ export function spv2CoreFactory(workerGlobal, _forcePureJs) {
     if (inWorker) {
         workerGlobal.onmessage = function (ev) {
             const data = ev.data || {};
+            const id = data.id;
             if (data.type === 'wipe') {
-                api.wipeSession();
-                // Reply only after the queued wipe actually ran, so the
-                // pagehide handshake keeps the original semantics.
-                enqueue(async () => {}).then(() => {
-                    workerGlobal.postMessage({ id: data.id, type: 'wiped' });
+                // Reply only after the actual queued wipe has completed.
+                api.wipeSession().then(() => {
+                    workerGlobal.postMessage({ id, type: 'wiped' });
                 });
                 return;
             }
             if (data.type === 'derive') {
                 api.derive(data).then((res) => {
-                    workerGlobal.postMessage({ id: data.id, ok: true, password: res.password, cached: res.cached });
+                    workerGlobal.postMessage({ id, ok: true, password: res.password, cached: res.cached });
                 }, (err) => {
                     workerGlobal.postMessage({
-                        id: data.id, ok: false,
+                        id, ok: false,
                         error: err && err.message ? err.message : 'DERIVE_ERROR',
                     });
                 });
