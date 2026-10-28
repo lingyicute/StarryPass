@@ -140,6 +140,8 @@ THIRD_PARTY_NOTICES.md  # @noble/hashes + hash-wasm (均 MIT) 许可证
 
 完整逐项判定、未移植项目和验证边界见 [docs/ported-hardening.md](docs/ported-hardening.md)。
 
+SW 网络传输截止、慢网取舍及新增回归见 [docs/network-timeout.md](docs/network-timeout.md)。
+
 ## 🗂️ License
 
 StarryPass is released under the GNU Affero General Public License v3.0 (AGPLv3).
