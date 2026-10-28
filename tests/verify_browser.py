@@ -16,6 +16,8 @@ import time
 
 from playwright.async_api import async_playwright
 
+from verify_network_timeout import run_network_timeout_checks
+
 ROOT = Path(__file__).resolve().parents[1]
 BASE_PASSWORD = 'WueNKY^SRHRh4!DL'
 FAKE_PASSWORD = 'LatestResult1!Ab'
@@ -551,6 +553,7 @@ async def main():
                     await test_real_crypto(browser, url)
                     await test_service_worker(browser, url, site, state)
                     await test_service_worker_read_failure(browser, url)
+                    await run_network_timeout_checks(browser, check)
                 finally:
                     await browser.close()
         finally:
