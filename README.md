@@ -45,13 +45,13 @@
    `assets/js/spv2-core.js` 重跑向量 + 会话缓存 → **通过**；
 4. **运行时自检（沿用原版开机已知答案自检 KAT）** —
    RFC 9106 §5.3 Argon2id KAT（同时覆盖 secret 与 associated data）+ RFC 5869 TC1 HMAC KAT；不通过则拒绝派生；
-5. **移植回归** — 13 条额外固定兼容向量、真正的 NFD/NFC 与 trim 检查；源码/发行包分别在 WASM 与 noble 路径下共 **170 项**比较；核心边界/清理 **85 项**、SW **35 项**、Chromium **84 个断言**。
+5. **移植回归** — 13 条额外固定兼容向量、真正的 NFD/NFC 与 trim 检查；源码/发行包分别在 WASM 与 noble 路径下共 **194 项**比较；核心边界/清理 **300 项**、SW **63 项**，另有 Chromium 浏览器回归（断言数以 `npm run test:browser` 输出为准）。
 
 ```bash
 npm ci
 npm test             # 核心/强度/SW 回归 + 原向量 + 构建产物
 npm run test:golden   # 再加原有 44 条黄金用例
-npm run test:compat   # 170 项源码/发行包、WASM/noble 固定答案与归一化检查
+npm run test:compat   # 194 项源码/发行包、WASM/noble 固定答案与归一化检查
 npm run test:parity   # vendored Argon2id 与 noble 的生产参数交叉对照
 # 浏览器测试需另装 playwright==1.64.1 与 Chromium：
 python3 -m pip install playwright==1.64.1
