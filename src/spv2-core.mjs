@@ -225,10 +225,10 @@ function startArgon2id({ password, salt, ad, memoryKiB, passes, parallelism, tag
  * ------------------------------------------------------------------ */
 
 async function buildSalt(codeBytes, tierId) {
-    const tierByte = new Uint8Array([tierId]);
-    const codeFrame = lenPrefixed(codeBytes);
-    let saltIn;
+    let tierByte, codeFrame, saltIn;
     try {
+        tierByte = new Uint8Array([tierId]);
+        codeFrame = lenPrefixed(codeBytes);
         saltIn = concatBytes([DOMAIN_SALT, codeFrame, tierByte]);
         return await sha256(saltIn);
     } finally {
@@ -243,10 +243,10 @@ async function buildSalt(codeBytes, tierId) {
  * ------------------------------------------------------------------ */
 
 async function computeSessionTag(masterBytes, codeBytes, tierId, nonce) {
-    const tierByte = new Uint8Array([tierId]);
-    const masterFrame = lenPrefixed(masterBytes);
-    let codeFrame, msg;
+    let tierByte, masterFrame, codeFrame, msg;
     try {
+        tierByte = new Uint8Array([tierId]);
+        masterFrame = lenPrefixed(masterBytes);
         codeFrame = lenPrefixed(codeBytes);
         msg = concatBytes([DOMAIN_CACHE, masterFrame, codeFrame, tierByte]);
         return await hmacSha256(nonce, msg);
@@ -326,14 +326,14 @@ class HkdfStream {
  * ------------------------------------------------------------------ */
 
 async function synthesizePassword(sk, codeBytes, counter, length, modeName) {
-    const modeSpec = MODES[modeName] || MODES.full;
+    const modeSpec = Object.prototype.hasOwnProperty.call(MODES, modeName) ? MODES[modeName] : MODES.full;
     const meta = new Uint8Array(7);
     writeLE32(meta, 0, counter >>> 0);
     writeLE16(meta, 4, length & 0xffff);
     meta[6] = modeSpec.id;
-    const codeFrame = lenPrefixed(codeBytes);
-    let info, stream;
+    let codeFrame, info, stream;
     try {
+        codeFrame = lenPrefixed(codeBytes);
         info = concatBytes([DOMAIN_EXPAND, meta, codeFrame]);
         stream = new HkdfStream(info);
         await stream.init(sk);
@@ -392,46 +392,50 @@ function runSelfTest(inWorker) {
             const s = new Uint8Array(16).fill(2);
             const k = new Uint8Array(8).fill(3);
             const x = new Uint8Array(12).fill(4);
-            const tagK = await argon2idDeriveWithKey(p, s, k, x, inWorker);
-            const expectedA2 = [
-                0x0d, 0x64, 0x0d, 0xf5, 0x8d, 0x78, 0x76, 0x6c, 0x08, 0xc0, 0x37, 0xa3, 0x4a, 0x8b, 0x53, 0xc9,
-                0xd0, 0x1e, 0xf0, 0x45, 0x2d, 0x75, 0xb6, 0x5e, 0xb5, 0x25, 0x20, 0xe9, 0x6b, 0x01, 0xe6, 0x59,
-            ];
-            for (let i = 0; i < 32; i++) {
-                if (tagK[i] !== expectedA2[i]) throw new Error('KAT_ARGON2ID_FAILED');
-            }
-
-            // 3. Cross-provider gate: the vendored hash-wasm (WASM) fast
-            //    path is enabled only if it reproduces the same vector
-            //    byte for byte. Mismatch disables the fast path.
-            if (hashwasmArgon2id) {
-                try {
-                    const hwTag = await hashwasmArgon2id({
-                        password: p, salt: s, secret: k, ad: x,
-                        parallelism: 4, iterations: 3, memorySize: 32,
-                        hashLength: 32, outputType: 'binary',
-                    });
-                    const hwBytes = validateSessionKey(hwTag);
-                    wasmProviderEnabled = constantTimeEqual(hwBytes, tagK);
-                    zeroize(hwBytes);
-                } catch {
-                    wasmProviderEnabled = false;
+            let tagK, tcSalt, tcIkm, prk;
+            try {
+                tagK = await argon2idDeriveWithKey(p, s, k, x, inWorker);
+                const expectedA2 = [
+                    0x0d, 0x64, 0x0d, 0xf5, 0x8d, 0x78, 0x76, 0x6c, 0x08, 0xc0, 0x37, 0xa3, 0x4a, 0x8b, 0x53, 0xc9,
+                    0xd0, 0x1e, 0xf0, 0x45, 0x2d, 0x75, 0xb6, 0x5e, 0xb5, 0x25, 0x20, 0xe9, 0x6b, 0x01, 0xe6, 0x59,
+                ];
+                for (let i = 0; i < 32; i++) {
+                    if (tagK[i] !== expectedA2[i]) throw new Error('KAT_ARGON2ID_FAILED');
                 }
-            }
-            if (!wasmProviderEnabled) {
-                console.warn('StarryPass: WASM provider unavailable; using noble-hashes.');
-            }
-            zeroize(tagK);
 
-            // 2. RFC 5869 TC1 HMAC/SHA-256 KAT (first 8 bytes of PRK).
-            const tcSalt = new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
-            const tcIkm = new Uint8Array(22).fill(0x0b);
-            const prk = await hmacSha256(tcSalt, tcIkm);
-            const expectedPrk8 = [0x07, 0x77, 0x09, 0x36, 0x2c, 0x2e, 0x32, 0xdf];
-            for (let j = 0; j < 8; j++) {
-                if (prk[j] !== expectedPrk8[j]) throw new Error('KAT_SHA256_FAILED');
+                // 3. Cross-provider gate: the vendored hash-wasm (WASM) fast
+                //    path is enabled only if it reproduces the same vector
+                //    byte for byte. Mismatch disables the fast path.
+                if (hashwasmArgon2id) {
+                    try {
+                        const hwTag = await hashwasmArgon2id({
+                            password: p, salt: s, secret: k, ad: x,
+                            parallelism: 4, iterations: 3, memorySize: 32,
+                            hashLength: 32, outputType: 'binary',
+                        });
+                        const hwBytes = validateSessionKey(hwTag);
+                        wasmProviderEnabled = constantTimeEqual(hwBytes, tagK);
+                        zeroize(hwBytes);
+                    } catch {
+                        wasmProviderEnabled = false;
+                    }
+                }
+                if (!wasmProviderEnabled) {
+                    console.warn('StarryPass: WASM provider unavailable; using noble-hashes.');
+                }
+
+                // 2. RFC 5869 TC1 HMAC/SHA-256 KAT (first 8 bytes of PRK).
+                tcSalt = new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+                tcIkm = new Uint8Array(22).fill(0x0b);
+                prk = await hmacSha256(tcSalt, tcIkm);
+                const expectedPrk8 = [0x07, 0x77, 0x09, 0x36, 0x2c, 0x2e, 0x32, 0xdf];
+                for (let j = 0; j < 8; j++) {
+                    if (prk[j] !== expectedPrk8[j]) throw new Error('KAT_SHA256_FAILED');
+                }
+            } finally {
+                zeroize(p); zeroize(s); zeroize(k); zeroize(x);
+                zeroize(tagK); zeroize(tcSalt); zeroize(tcIkm); zeroize(prk);
             }
-            zeroize(prk);
         })().catch((err) => {
             wasmProviderEnabled = false;
             selfTestPromise = null; // allow retry on transient failure
@@ -578,8 +582,14 @@ export function spv2CoreFactory(workerGlobal, _forcePureJs) {
                 // Capture the six request fields now, not after an async KAT
                 // or earlier queued job. Reusing a caller's request object
                 // must not silently change a previously requested password.
-                snapshot = { master: req.master, code: req.code, tier: req.tier,
-                    counter: req.counter, length: req.length, mode: req.mode };
+                snapshot = {
+                    master: String(req.master || ''),
+                    code: String(req.code || ''),
+                    tier: Object.prototype.hasOwnProperty.call(TIERS, req.tier) ? req.tier : 'standard',
+                    counter: parseInt(req.counter, 10),
+                    length: parseInt(req.length, 10),
+                    mode: Object.prototype.hasOwnProperty.call(MODES, req.mode) ? req.mode : 'full',
+                };
             } catch (error) {
                 inputError = { error }; // preserve Promise/FIFO and error cleanup
             }

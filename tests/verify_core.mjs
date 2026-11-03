@@ -327,4 +327,24 @@ for(const lane of ['wasm','noble-local','noble-worker']) {
     }
 }
 
+// Mutable object/array fields are coerced at derive() call time, not after queue delay,
+// and failed boot KATs still zeroize their temporary KAT buffers.
+{
+    const f=fixture();const e=f.spv2CoreFactory(null,false);
+    const baseline=await e.derive(args);
+    const mutableMaster={val:args.master,toString(){return this.val;}};
+    const mutableCode={val:args.code,toString(){return this.val;}};
+    const mutableCounter={val:1,toString(){return String(this.val);}};
+    const pending=e.derive({...args,master:mutableMaster,code:mutableCode,counter:mutableCounter});
+    mutableMaster.val='mutated after call';mutableCode.val='mutated-site';mutableCounter.val=99;
+    check((await pending).password===baseline.password,'boxed/object fields coerced at call time before queue execution');
+    await e.wipeSession();
+
+    const katTags=[];
+    const badKat=fixture({argon2idAsync:async()=>{const t=new Uint8Array(32).fill(99);katTags.push(t);return t;}});
+    const badEngine=badKat.spv2CoreFactory(null,false);
+    await reject(badEngine.derive(args),/KAT_ARGON2ID_FAILED/);
+    check(katTags.length===1&&zero(katTags[0]),'failed Argon2 KAT still zeroizes its temporary tag');
+}
+
 console.log(`PASS production core: ${checks} cache, CSPRNG, cleanup, provider and async-wipe checks`);
