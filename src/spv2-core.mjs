@@ -416,20 +416,22 @@ function runSelfTest(inWorker) {
                 //    path is enabled only if it reproduces the same vector
                 //    byte for byte. Mismatch disables the fast path.
                 if (hashwasmArgon2id) {
+                    let hwBytes;
                     try {
                         const hwTag = await hashwasmArgon2id({
                             password: p, salt: s, secret: k, ad: x,
                             parallelism: 4, iterations: 3, memorySize: 32,
                             hashLength: 32, outputType: 'binary',
                         });
-                        const hwBytes = validateSessionKey(hwTag);
+                        hwBytes = validateSessionKey(hwTag);
                         wasmProviderEnabled = constantTimeEqual(hwBytes, tagK);
-                        zeroize(hwBytes);
                     } catch {
                         wasmProviderEnabled = false;
+                    } finally {
+                        zeroize(hwBytes);
                     }
                 }
-                if (!wasmProviderEnabled) {
+                if (!wasmProviderEnabled && typeof console === 'object' && console && typeof console.warn === 'function') {
                     console.warn('StarryPass: WASM provider unavailable; using noble-hashes.');
                 }
             } finally {
@@ -461,6 +463,8 @@ async function argon2idDeriveWithKey(password, salt, key, ad, inWorker) {
  * ------------------------------------------------------------------ */
 
 function canonicalizeInputs(req) {
+    if (!req || typeof req !== 'object') throw new TypeError('INVALID_REQUEST');
+    if (typeof req.master === 'symbol' || typeof req.code === 'symbol') throw new TypeError('INVALID_INPUT');
     const masterNorm = String(req.master || '').normalize('NFC');
     const codeNorm   = String(req.code || '').trim().normalize('NFC');
     // Keep the production golden-set fallback contract; never select a
@@ -584,6 +588,8 @@ export function spv2CoreFactory(workerGlobal, _forcePureJs) {
                 // Capture the six request fields now, not after an async KAT
                 // or earlier queued job. Reusing a caller's request object
                 // must not silently change a previously requested password.
+                if (!req || typeof req !== 'object') throw new TypeError('INVALID_REQUEST');
+                if (typeof req.master === 'symbol' || typeof req.code === 'symbol') throw new TypeError('INVALID_INPUT');
                 const tier = req.tier == null || typeof req.tier === 'symbol' ? '' : String(req.tier);
                 const mode = req.mode == null || typeof req.mode === 'symbol' ? '' : String(req.mode);
                 snapshot = {
