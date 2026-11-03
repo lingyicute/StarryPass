@@ -15,6 +15,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="StarryPass">
     <link rel="shortcut icon" href="./favicon.ico" sizes="32x32" type="image/x-icon">
+    <link rel="apple-touch-icon" href="./assets/img/icons/apple.png">
     <link rel="icon" href="./assets/img/icons/192.png" sizes="192x192" type="image/png" />
     <link rel="icon" href="./assets/img/icons/512.png" sizes="512x512" type="image/png" />
     <style>
@@ -785,7 +786,7 @@
                         <div class="policy__label">轮换序号（单站泄露时递增即可换密）</div>
                         <div class="counter-row">
                             <button type="button" class="icon-button" id="ctr-dec" aria-label="序号减一">−</button>
-                            <input id="counter-input" type="number" min="1" max="9999" value="1" inputmode="numeric">
+                            <input id="counter-input" type="number" min="1" max="9999" value="1" inputmode="numeric" aria-label="轮换序号">
                             <button type="button" class="icon-button" id="ctr-inc" aria-label="序号加一">+</button>
                         </div>
                     </div>
@@ -1337,7 +1338,8 @@
             masterInput.addEventListener('compositionend', scheduleRefresh);
             codeInput.addEventListener('compositionend', scheduleRefresh);
             codeInput.addEventListener('keydown', function (e) {
-                if (e.key === 'Enter' && !copyBtn.disabled) copyBtn.click();
+                // 输入法选词时的回车只用于确认候选，不能触发复制。
+                if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229 && !copyBtn.disabled) copyBtn.click();
             });
 
             function copyText(text) {
