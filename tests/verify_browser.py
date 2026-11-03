@@ -320,6 +320,16 @@ async def test_copy_and_theme(browser, url):
     print('PASS browser: async clipboard feedback, focus and theme restore')
 
 
+async def test_counter_accessible_name(browser, url):
+    context, page = await mock_page(browser, url)
+    try:
+        check(await page.get_by_role('spinbutton', name='轮换序号').count() == 1,
+              'counter number input exposes an accessible name')
+    finally:
+        await context.close()
+    print('PASS browser: counter input accessible name')
+
+
 THEME_PROBE = """(() => {
     // 记录 data-theme 的赋值时机：首帧前（<body> 尚未解析）就必须已写入主题。
     window.__themeWrites = [];
@@ -664,6 +674,7 @@ async def main():
                     await test_malformed_results(browser, url)
                     await test_noble_fallback(browser, url)
                     await test_copy_and_theme(browser, url)
+                    await test_counter_accessible_name(browser, url)
                     await test_theme_first_paint_and_system_follow(browser, url)
                     await test_tap_feedback_and_keyboard_focus(browser, url)
                     await test_real_crypto(browser, url)
