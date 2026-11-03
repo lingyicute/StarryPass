@@ -301,4 +301,30 @@ for(const lane of ['wasm','noble-local','noble-worker']) {
     check(messages[1].id===103&&messages[1].type==='wiped','Worker wipe captures the received response id');
 }
 
+// Failing to allocate the Argon2 matrix is reported as MEMORY_LIMIT (the UI's
+// low-memory hint); other provider errors, and the later malformed-output
+// check, keep their own codes. Covers all three provider lanes.
+{
+    const kat=argon2id(new Uint8Array(32).fill(1),new Uint8Array(16).fill(2),
+        {t:3,m:32,p:4,dkLen:32,version:0x13,key:new Uint8Array(8).fill(3),personalization:new Uint8Array(12).fill(4)});
+    const mem=()=>{throw new RangeError('Array buffer allocation failed');};
+    for(const lane of ['wasm','noble','noble-worker']) {
+        for(const [label,fault,expected] of [['allocation',mem,/^Error: MEMORY_LIMIT$/],
+            ['other',()=>{throw new Error('INJECTED_KDF');},/INJECTED_KDF/]]) {
+            let failing=false;
+            const wasm=lane==='wasm'?{argon2id:async opts=>{if(opts.memorySize===32)return kat.slice();if(failing)fault();return new Uint8Array(32).fill(5);}}:null;
+            const f=fixture({provider:wasm,
+                argon2id:(password,salt,opts)=>{if(opts.m===32)return argon2id(password,salt,opts);if(failing)fault();return new Uint8Array(32).fill(5);},
+                argon2idAsync:async(password,salt,opts)=>{if(opts.m===32)return argon2id(password,salt,opts);if(failing)fault();return new Uint8Array(32).fill(5);}});
+            const e=f.spv2CoreFactory(lane==='noble-worker'?{postMessage(){}}:null,false);
+            await e.derive(args);failing=true;
+            await reject(e.derive({...args,master:'memory fault '+lane+label}),expected);
+            check(f.state.encoded.every(zero),lane+' '+label+' KDF failure clears inputs');
+            failing=false;
+            check((await e.derive(args)).cached===false,lane+' '+label+' recovers with a clean cache');
+            await e.wipeSession();
+        }
+    }
+}
+
 console.log(`PASS production core: ${checks} cache, CSPRNG, cleanup, provider and async-wipe checks`);
