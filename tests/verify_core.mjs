@@ -238,7 +238,7 @@ for(const provider of [null,{argon2id:async()=>{throw new Error(args.master);}},
     await reject(rejected,/INJECTED_request_getter/);
     check(zero(oldKey),'snapshot error clears the preceding cached session key through finally');
     check((await later).cached===false,'snapshot error does not break FIFO or leak prior cache');
-    for(const missing of [null,undefined]) {
+    for(const missing of [null,undefined,123,'raw-string',true,{master:Symbol('m'),code:'x'},{master:'x',code:Symbol('c')}]) {
         let result;
         assert.doesNotThrow(()=>{result=e.derive(missing);});checks++;
         await reject(result,TypeError);
@@ -363,6 +363,11 @@ for(const lane of ['wasm','noble-local','noble-worker']) {
     const badEngine=badKat.spv2CoreFactory(null,false);
     await reject(badEngine.derive(args),/KAT_ARGON2ID_FAILED/);
     check(katTags.length===1&&zero(katTags[0]),'failed Argon2 KAT still zeroizes its temporary tag');
+
+    const noWarn=fixture({provider:null,console:{}});
+    const noWarnEngine=noWarn.spv2CoreFactory(null,false);
+    check((await noWarnEngine.derive(args)).password.length===16,'missing console.warn does not fail noble fallback');
+    await noWarnEngine.wipeSession();
 }
 
 console.log(`PASS production core: ${checks} cache, CSPRNG, cleanup, provider and async-wipe checks`);
