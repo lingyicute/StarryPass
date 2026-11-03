@@ -169,20 +169,43 @@ function validateSessionKey(output) {
  * already off the UI thread); everywhere else we run the async variant
  * which yields periodically so the page stays responsive.
  */
-function argon2idDerive({ password, salt, ad, memoryKiB, passes, parallelism, tagLength }, inWorker) {
+function argon2idDerive(params, inWorker) {
+    let pending;
+    try {
+        pending = startArgon2id(params, inWorker);
+    } catch (err) {
+        return Promise.reject(classifyKdfError(err));
+    }
+    // Only provider failures are classified; a malformed output still
+    // reaches validateSessionKey and keeps its INVALID_KDF_OUTPUT error.
+    return Promise.resolve(pending).then(validateSessionKey, (err) => {
+        throw classifyKdfError(err);
+    });
+}
+
+/* Both providers allocate the whole Argon2 matrix up front (WebAssembly.Memory
+ * or a typed array); when the device cannot supply it they throw RangeError.
+ * Report that as MEMORY_LIMIT, the code the UI maps to its low-memory hint,
+ * instead of an opaque provider message. */
+function classifyKdfError(err) {
+    if (err && (err instanceof RangeError || err.name === 'RangeError')) {
+        return new Error('MEMORY_LIMIT');
+    }
+    return err;
+}
+
+function startArgon2id({ password, salt, ad, memoryKiB, passes, parallelism, tagLength }, inWorker) {
     if (wasmProviderEnabled && hashwasmArgon2id) {
-        return Promise.resolve(
-            hashwasmArgon2id({
-                password,
-                salt,
-                ad,
-                iterations: passes,
-                memorySize: memoryKiB,
-                parallelism,
-                hashLength: tagLength,
-                outputType: 'binary',
-            }),
-        ).then(validateSessionKey);
+        return hashwasmArgon2id({
+            password,
+            salt,
+            ad,
+            iterations: passes,
+            memorySize: memoryKiB,
+            parallelism,
+            hashLength: tagLength,
+            outputType: 'binary',
+        });
     }
     const opts = {
         t: passes,
@@ -192,10 +215,9 @@ function argon2idDerive({ password, salt, ad, memoryKiB, passes, parallelism, ta
         version: 0x13,
         personalization: ad,
     };
-    const pending = inWorker
-        ? Promise.resolve(argon2id(password, salt, opts))
+    return inWorker
+        ? argon2id(password, salt, opts)
         : argon2idAsync(password, salt, { ...opts, asyncTick: 30 });
-    return Promise.resolve(pending).then(validateSessionKey);
 }
 
 /* ------------------------------------------------------------------ *
