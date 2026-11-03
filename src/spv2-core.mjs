@@ -403,6 +403,15 @@ function runSelfTest(inWorker) {
                     if (tagK[i] !== expectedA2[i]) throw new Error('KAT_ARGON2ID_FAILED');
                 }
 
+                // 2. RFC 5869 TC1 HMAC/SHA-256 KAT (first 8 bytes of PRK).
+                tcSalt = new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+                tcIkm = new Uint8Array(22).fill(0x0b);
+                prk = await hmacSha256(tcSalt, tcIkm);
+                const expectedPrk8 = [0x07, 0x77, 0x09, 0x36, 0x2c, 0x2e, 0x32, 0xdf];
+                for (let j = 0; j < 8; j++) {
+                    if (prk[j] !== expectedPrk8[j]) throw new Error('KAT_SHA256_FAILED');
+                }
+
                 // 3. Cross-provider gate: the vendored hash-wasm (WASM) fast
                 //    path is enabled only if it reproduces the same vector
                 //    byte for byte. Mismatch disables the fast path.
@@ -422,15 +431,6 @@ function runSelfTest(inWorker) {
                 }
                 if (!wasmProviderEnabled) {
                     console.warn('StarryPass: WASM provider unavailable; using noble-hashes.');
-                }
-
-                // 2. RFC 5869 TC1 HMAC/SHA-256 KAT (first 8 bytes of PRK).
-                tcSalt = new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
-                tcIkm = new Uint8Array(22).fill(0x0b);
-                prk = await hmacSha256(tcSalt, tcIkm);
-                const expectedPrk8 = [0x07, 0x77, 0x09, 0x36, 0x2c, 0x2e, 0x32, 0xdf];
-                for (let j = 0; j < 8; j++) {
-                    if (prk[j] !== expectedPrk8[j]) throw new Error('KAT_SHA256_FAILED');
                 }
             } finally {
                 zeroize(p); zeroize(s); zeroize(k); zeroize(x);
@@ -465,10 +465,12 @@ function canonicalizeInputs(req) {
     const codeNorm   = String(req.code || '').trim().normalize('NFC');
     // Keep the production golden-set fallback contract; never select a
     // prototype property such as constructor/__proto__ as a mode or tier.
-    const tierSpec = Object.prototype.hasOwnProperty.call(TIERS, req.tier) ? TIERS[req.tier] : TIERS.standard;
+    const tierKey = req.tier == null || typeof req.tier === 'symbol' ? '' : String(req.tier);
+    const modeKey = req.mode == null || typeof req.mode === 'symbol' ? '' : String(req.mode);
+    const tierSpec = Object.prototype.hasOwnProperty.call(TIERS, tierKey) ? TIERS[tierKey] : TIERS.standard;
     const counter = Math.max(1, Math.min(9999, parseInt(req.counter, 10) || 1));
     const length  = Math.max(4, Math.min(64, parseInt(req.length, 10) || 16));
-    const mode = Object.prototype.hasOwnProperty.call(MODES, req.mode) ? req.mode : 'full';
+    const mode = Object.prototype.hasOwnProperty.call(MODES, modeKey) ? modeKey : 'full';
     let masterBytes, codeBytes;
     try {
         masterBytes = encoder.encode(masterNorm);
@@ -536,6 +538,8 @@ export function spv2CoreFactory(workerGlobal, _forcePureJs) {
                 sk = cachedSk;
                 usedCache = true;
             } else {
+                zeroize(cachedTag); cachedTag = null;
+                zeroize(cachedSk); cachedSk = null;
                 salt = await buildSalt(inp.codeBytes, inp.tierSpec.id);
                 assertCurrent(epoch);
                 sk = await argon2idDerive({
@@ -550,8 +554,6 @@ export function spv2CoreFactory(workerGlobal, _forcePureJs) {
             assertCurrent(epoch);
             // A failed/stale derivation must not publish key material to cache.
             if (!usedCache) {
-                zeroize(cachedTag);
-                zeroize(cachedSk);
                 cachedTag = reqTag; reqTag = null;
                 cachedSk = sk;
             }
@@ -582,13 +584,15 @@ export function spv2CoreFactory(workerGlobal, _forcePureJs) {
                 // Capture the six request fields now, not after an async KAT
                 // or earlier queued job. Reusing a caller's request object
                 // must not silently change a previously requested password.
+                const tier = req.tier == null || typeof req.tier === 'symbol' ? '' : String(req.tier);
+                const mode = req.mode == null || typeof req.mode === 'symbol' ? '' : String(req.mode);
                 snapshot = {
                     master: String(req.master || ''),
                     code: String(req.code || ''),
-                    tier: Object.prototype.hasOwnProperty.call(TIERS, req.tier) ? req.tier : 'standard',
+                    tier: Object.prototype.hasOwnProperty.call(TIERS, tier) ? tier : 'standard',
                     counter: parseInt(req.counter, 10),
                     length: parseInt(req.length, 10),
-                    mode: Object.prototype.hasOwnProperty.call(MODES, req.mode) ? req.mode : 'full',
+                    mode: Object.prototype.hasOwnProperty.call(MODES, mode) ? mode : 'full',
                 };
             } catch (error) {
                 inputError = { error }; // preserve Promise/FIFO and error cleanup
@@ -605,7 +609,7 @@ export function spv2CoreFactory(workerGlobal, _forcePureJs) {
 
     if (inWorker) {
         workerGlobal.onmessage = function (ev) {
-            const data = ev.data || {};
+            const data = (ev && ev.data) || {};
             const id = data.id;
             if (data.type === 'wipe') {
                 // Reply only after the actual queued wipe has completed.

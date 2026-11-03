@@ -330,14 +330,32 @@ for(const lane of ['wasm','noble-local','noble-worker']) {
 // Mutable object/array fields are coerced at derive() call time, not after queue delay,
 // and failed boot KATs still zeroize their temporary KAT buffers.
 {
-    const f=fixture();const e=f.spv2CoreFactory(null,false);
+    let oldTagZeroAtNextKdf=false;
+    const f=fixture({argon2idAsync:async(password,salt,opts)=>{
+        if(opts.m===32)return argon2id(password,salt,opts);
+        if(f.tags.length===1)oldTagZeroAtNextKdf=zero(f.tags[0]);
+        const bytes=new Uint8Array(32).fill(opts.m===262144?22:11);
+        f.tags.push(bytes);
+        return bytes;
+    }});
+    const e=f.spv2CoreFactory(null,false);
     const baseline=await e.derive(args);
+    const pinParanoid=await e.derive({...args,tier:'paranoid',mode:'pin',length:6});
+    check(oldTagZeroAtNextKdf,'cache miss zeroizes previous session key before starting next KDF');
+    let tierReads=0,modeReads=0;
     const mutableMaster={val:args.master,toString(){return this.val;}};
     const mutableCode={val:args.code,toString(){return this.val;}};
     const mutableCounter={val:1,toString(){return String(this.val);}};
-    const pending=e.derive({...args,master:mutableMaster,code:mutableCode,counter:mutableCounter});
+    const mutableLength={val:6,toString(){return String(this.val);}};
+    const mutableTier={val:'paranoid',toString(){tierReads++;return this.val;}};
+    const mutableMode={val:'pin',toString(){modeReads++;return this.val;}};
+    const first=e.derive({...args,master:mutableMaster,code:mutableCode,counter:mutableCounter});
+    const second=e.derive({...args,tier:mutableTier,mode:mutableMode,length:mutableLength});
     mutableMaster.val='mutated after call';mutableCode.val='mutated-site';mutableCounter.val=99;
-    check((await pending).password===baseline.password,'boxed/object fields coerced at call time before queue execution');
+    mutableTier.val='standard';mutableMode.val='full';mutableLength.val=24;
+    check((await first).password===baseline.password,'boxed/object fields coerced at call time before queue execution');
+    check((await second).password===pinParanoid.password,'boxed/object tier, mode and length coerced to primitives at call time');
+    check(tierReads===1&&modeReads===1,'tier and mode objects are evaluated only once at snapshot time');
     await e.wipeSession();
 
     const katTags=[];
