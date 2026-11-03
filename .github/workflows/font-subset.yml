@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   subset-and-embed:
@@ -35,6 +36,7 @@ jobs:
           python scripts/subset_font.py
 
       - name: Commit and push changes as user
+        id: commit
         env:
           COMMIT_NAME: ${{ github.actor }}
           COMMIT_EMAIL: ${{ github.event.pusher.email || format('{0}@users.noreply.github.com', github.actor) }}
@@ -47,4 +49,12 @@ jobs:
             git add index.html
             git commit -m "perf: 更新 Nebulove 字体子集"
             git push
+            echo "pushed=true" >> "$GITHUB_OUTPUT"
           fi
+
+      # GITHUB_TOKEN 推送的提交不会触发其他工作流，字体提交需显式重新发布 Pages。
+      - name: Redeploy Pages with the embedded font
+        if: steps.commit.outputs.pushed == 'true' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run static.yml --ref main
