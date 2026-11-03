@@ -1126,7 +1126,10 @@
                 scheduleRefresh();
             });
             function readCounter() {
-                return Math.max(1, Math.min(9999, parseInt(counterInput.value, 10) || 1));
+                // number 输入允许科学计数法；valueAsNumber 才能避免把 1e2 错读为 1。
+                var value = typeof counterInput.valueAsNumber === 'number'
+                    ? Math.trunc(counterInput.valueAsNumber) : parseInt(counterInput.value, 10);
+                return Math.max(1, Math.min(9999, value || 1));
             }
             function clampCounter() {
                 state.counter = readCounter();
@@ -1148,7 +1151,7 @@
                 var prev = state.counter;
                 state.counter = readCounter();
                 // 超出上限的数字只会越敲越大，可以立即回写，避免显示值与实际生效值不一致。
-                if (parseInt(counterInput.value, 10) > 9999) counterInput.value = String(state.counter);
+                if (counterInput.valueAsNumber > 9999) counterInput.value = String(state.counter);
                 if (state.counter !== prev) scheduleRefresh();
             });
             function commitCounter() {
