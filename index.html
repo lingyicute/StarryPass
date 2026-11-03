@@ -1381,6 +1381,11 @@
             }
 
             var masterComposing = false, codeComposing = false;
+            // 组合输入期间点击策略按钮不应先抢走焦点并触发 blur 提交；
+            // 保留焦点后，compositionend 仍会按最终文本只派生一次。
+            document.getElementById('policy').addEventListener('pointerdown', function (e) {
+                if ((masterComposing || codeComposing) && e.target.closest('button')) e.preventDefault();
+            });
             function scheduleRefresh(e) {
                 var composing = !!(e && e.isComposing) || masterComposing || codeComposing;
                 if (invalidateResult(composing) && !composing) debounceTimer = setTimeout(refresh, 280);
