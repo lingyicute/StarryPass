@@ -462,9 +462,28 @@ async function argon2idDeriveWithKey(password, salt, key, ad, inWorker) {
  * Input canonicalisation (verbatim from v2)                           *
  * ------------------------------------------------------------------ */
 
+function clampParam(val, min, max, fallback) {
+    if (val === undefined || val === null || typeof val === 'boolean') return fallback;
+    let n;
+    if (typeof val === 'number') {
+        n = Number.isFinite(val) ? Math.trunc(val) : NaN;
+    } else {
+        const s = String(val).trim();
+        if (!s) return fallback;
+        const num = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(s) ? Number(s) : parseInt(s, 10);
+        if (Number.isNaN(num)) return fallback;
+        n = Number.isFinite(num) ? Math.trunc(num) : num;
+    }
+    if (Number.isNaN(n)) return fallback;
+    return Math.max(min, Math.min(max, n));
+}
+
 function canonicalizeInputs(req) {
     if (!req || typeof req !== 'object') throw new TypeError('INVALID_REQUEST');
-    if (typeof req.master === 'symbol' || typeof req.code === 'symbol') throw new TypeError('INVALID_INPUT');
+    if (typeof req.master === 'symbol' || typeof req.code === 'symbol'
+            || typeof req.counter === 'symbol' || typeof req.length === 'symbol') {
+        throw new TypeError('INVALID_INPUT');
+    }
     const masterNorm = String(req.master || '').normalize('NFC');
     const codeNorm   = String(req.code || '').trim().normalize('NFC');
     // Keep the production golden-set fallback contract; never select a
@@ -472,8 +491,8 @@ function canonicalizeInputs(req) {
     const tierKey = req.tier == null || typeof req.tier === 'symbol' ? '' : String(req.tier);
     const modeKey = req.mode == null || typeof req.mode === 'symbol' ? '' : String(req.mode);
     const tierSpec = Object.prototype.hasOwnProperty.call(TIERS, tierKey) ? TIERS[tierKey] : TIERS.standard;
-    const counter = Math.max(1, Math.min(9999, parseInt(req.counter, 10) || 1));
-    const length  = Math.max(4, Math.min(64, parseInt(req.length, 10) || 16));
+    const counter = clampParam(req.counter, 1, 9999, 1);
+    const length  = clampParam(req.length, 4, 64, 16);
     const mode = Object.prototype.hasOwnProperty.call(MODES, modeKey) ? modeKey : 'full';
     let masterBytes, codeBytes;
     try {
@@ -589,15 +608,18 @@ export function spv2CoreFactory(workerGlobal, _forcePureJs) {
                 // or earlier queued job. Reusing a caller's request object
                 // must not silently change a previously requested password.
                 if (!req || typeof req !== 'object') throw new TypeError('INVALID_REQUEST');
-                if (typeof req.master === 'symbol' || typeof req.code === 'symbol') throw new TypeError('INVALID_INPUT');
+                if (typeof req.master === 'symbol' || typeof req.code === 'symbol'
+                        || typeof req.counter === 'symbol' || typeof req.length === 'symbol') {
+                    throw new TypeError('INVALID_INPUT');
+                }
                 const tier = req.tier == null || typeof req.tier === 'symbol' ? '' : String(req.tier);
                 const mode = req.mode == null || typeof req.mode === 'symbol' ? '' : String(req.mode);
                 snapshot = {
                     master: String(req.master || ''),
                     code: String(req.code || ''),
                     tier: Object.prototype.hasOwnProperty.call(TIERS, tier) ? tier : 'standard',
-                    counter: parseInt(req.counter, 10),
-                    length: parseInt(req.length, 10),
+                    counter: clampParam(req.counter, 1, 9999, 1),
+                    length: clampParam(req.length, 4, 64, 16),
                     mode: Object.prototype.hasOwnProperty.call(MODES, mode) ? mode : 'full',
                 };
             } catch (error) {
@@ -615,16 +637,26 @@ export function spv2CoreFactory(workerGlobal, _forcePureJs) {
 
     if (inWorker) {
         workerGlobal.onmessage = function (ev) {
-            const data = (ev && ev.data) || {};
-            const id = data.id;
-            if (data.type === 'wipe') {
+            let data, id, type;
+            try {
+                data = (ev && ev.data) || {};
+                id = data.id;
+                type = data.type;
+            } catch (err) {
+                workerGlobal.postMessage({
+                    id, ok: false,
+                    error: err && err.message ? err.message : 'DERIVE_ERROR',
+                });
+                return;
+            }
+            if (type === 'wipe') {
                 // Reply only after the actual queued wipe has completed.
                 api.wipeSession().then(() => {
                     workerGlobal.postMessage({ id, type: 'wiped' });
                 });
                 return;
             }
-            if (data.type === 'derive') {
+            if (type === 'derive') {
                 api.derive(data).then((res) => {
                     workerGlobal.postMessage({ id, ok: true, password: res.password, cached: res.cached });
                 }, (err) => {
