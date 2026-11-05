@@ -238,11 +238,23 @@ for(const provider of [null,{argon2id:async()=>{throw new Error(args.master);}},
     await reject(rejected,/INJECTED_request_getter/);
     check(zero(oldKey),'snapshot error clears the preceding cached session key through finally');
     check((await later).cached===false,'snapshot error does not break FIFO or leak prior cache');
-    for(const missing of [null,undefined,123,'raw-string',true,{master:Symbol('m'),code:'x'},{master:'x',code:Symbol('c')}]) {
+    for(const missing of [null,undefined,123,'raw-string',true,{master:Symbol('m'),code:'x'},{master:'x',code:Symbol('c')},
+        {...args,counter:Symbol('n')},{...args,length:Symbol('l')}]) {
         let result;
         assert.doesNotThrow(()=>{result=e.derive(missing);});checks++;
         await reject(result,TypeError);
     }
+    check((await e.derive({...args,length:0})).password.length===4,'zero length clamps to minimum 4');
+    check((await e.derive({...args,length:'0'})).password.length===4,'string zero length clamps to minimum 4');
+    check((await e.derive({...args,length:1e21})).password.length===64,'huge length clamps to maximum 64');
+    check((await e.derive({...args,length:'1e2'})).password.length===64,'exponent string length clamps to maximum 64');
+    check((await e.derive({...args,length:'1e500'})).password.length===64,'overflow exponent length clamps to maximum 64');
+    check((await e.derive({...args,length:'-1e500'})).password.length===4,'negative overflow exponent length clamps to minimum 4');
+    check((await e.derive({...args,length:9e-7})).password.length===4,'fractional sub-one exponent length clamps to minimum 4');
+    check((await e.derive({...args,counter:'1e5'})).password===(await e.derive({...args,counter:9999})).password,'exponent counter clamps to 9999');
+    check((await e.derive({...args,counter:'1e500'})).password===(await e.derive({...args,counter:9999})).password,'overflow exponent counter clamps to 9999');
+    check((await e.derive({...args,counter:'-1e500'})).password===(await e.derive({...args,counter:1})).password,'negative overflow exponent counter clamps to 1');
+    check((await e.derive({...args,counter:5e-7})).password===(await e.derive({...args,counter:1})).password,'fractional sub-one exponent counter clamps to 1');
     const falsy=await e.derive({get master(){throw null;}}).then(()=>({resolved:true}),reason=>({resolved:false,reason}));
     check(!falsy.resolved&&falsy.reason===null,'falsy thrown values are not mistaken for valid snapshots');
     const obsolete=e.derive(bad).then(()=>null,err=>err.message);
@@ -299,6 +311,9 @@ for(const lane of ['wasm','noble-local','noble-worker']) {
     const wipe={id:103,type:'wipe'};worker.onmessage({data:wipe});wipe.id=104;
     for(let n=0;messages.length<2;n++){assert.ok(n<1000);await new Promise(r=>setTimeout(r,1));}
     check(messages[1].id===103&&messages[1].type==='wiped','Worker wipe captures the received response id');
+    worker.onmessage({data:{id:105,get type(){throw new Error('BAD_ENVELOPE');}}});
+    check(messages[2].id===105&&messages[2].ok===false&&messages[2].error==='BAD_ENVELOPE',
+        'Worker catches throwing envelope getters and replies with error');
 }
 
 // Failing to allocate the Argon2 matrix is reported as MEMORY_LIMIT (the UI's
