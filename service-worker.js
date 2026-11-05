@@ -52,8 +52,7 @@ function isShellRequest(request) {
 
 async function matchCached(name, request) {
     try {
-        // Read only this named cache; do not create it or let one storage
-        // failure hide a usable copy in the other cache.
+        // 只读取指定名称的缓存：不创建它，也不让一处存储故障掩盖另一缓存里可用的副本。
         return await caches.match(request, { cacheName: name });
     } catch (err) {
         return undefined;
