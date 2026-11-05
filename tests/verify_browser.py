@@ -347,6 +347,8 @@ async def test_async_local_queue(browser, url):
         check(not await page.is_hidden('#derive-bar'),'late local rejection cannot finish BFCache replacement')
         await resolve(6)
         check(await page.is_enabled('#copy-btn'),'BFCache replacement completes normally')
+        await page.fill('#master-input','')
+        check(await page.evaluate('__localWipes')>0,'manual clear wipes local engine session key')
     finally:
         await context.close()
     print('PASS browser: async Web Crypto queue, reset and BFCache races')
