@@ -164,7 +164,8 @@ async def test_queue(browser, url):
             input.value = 'ime-raw';
             input.dispatchEvent(new InputEvent('input', {bubbles: true, isComposing: true}));
         }""")
-        await page.click('#ctr-inc')
+        # 真实点击会让代号框失焦并结束组合态；这里用合成点击保持焦点，模拟组合期间的策略变更。
+        await page.dispatch_event('#ctr-inc', 'click')
         check(not await page.is_enabled('#copy-btn') and await page.is_hidden('#derive-bar'),
               'IME composition immediately invalidates previous output without stuck busy bar')
         await page.clock.run_for(300)
@@ -184,6 +185,22 @@ async def test_queue(browser, url):
             ctr.dispatchEvent(new FocusEvent('blur'));
         }""")
         check(await page.input_value('#counter-input') == '9999', 'counter blur normalizes raw text even without change event')
+        await reply(page, (await requests(page))[-1])
+        before_blur_count = len(await requests(page))
+        await page.focus('#code-input')
+        await page.evaluate("""() => {
+            const input = document.getElementById('code-input');
+            input.dispatchEvent(new CompositionEvent('compositionstart', {bubbles: true}));
+            input.value = 'ime-blur';
+            input.dispatchEvent(new InputEvent('input', {bubbles: true, isComposing: true}));
+        }""")
+        await page.clock.run_for(300)
+        check(len(await requests(page)) == before_blur_count, 'IME composition holds KDF while the field keeps focus')
+        await page.click('#ctr-dec')
+        await page.clock.run_for(300)
+        check(len(await requests(page)) == before_blur_count + 1 and (await requests(page))[-1]['code'] == 'ime-blur'
+              and (await requests(page))[-1]['counter'] == 9998,
+              'blur without compositionend ends composition and resumes derivation')
         await reply(page, (await requests(page))[-1])
         await page.fill('#counter-input', '1e2'); await page.clock.run_for(300)
         check((await requests(page))[-1]['counter'] == 100,
@@ -208,6 +225,8 @@ async def test_queue(browser, url):
         await reply(page, (await requests(page))[-1])
         await page.fill('#master-input', '')
         check(not await page.is_enabled('#copy-btn'), 'manual clear invalidates immediately')
+        check(await page.evaluate("__workers.at(-1).messages.some(m => m.type === 'wipe')"),
+              'manual clear wipes cached Worker session key')
         await page.clock.run_for(300)
         check(await page.inner_text('#password-output') == '请填写完整的主密码和代号', 'manual clear stays empty')
     finally:
