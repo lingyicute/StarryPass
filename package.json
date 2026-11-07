@@ -6,6 +6,9 @@
   "license": "AGPL-3.0-or-later",
   "author": "lingyicute",
   "private": true,
+  "engines": {
+    "node": ">=20.19.0"
+  },
   "scripts": {
     "build": "esbuild src/spv2-core.mjs --bundle --format=iife --platform=browser --tsconfig-raw='{}' --minify --legal-comments=eof --banner:js='/*! StarryPass v2 production core — AGPL-3.0 — bundles @noble/hashes + hash-wasm (both MIT), see THIRD_PARTY_NOTICES.md */' --outfile=assets/js/spv2-core.js",
     "test": "node tests/verify_strength.mjs && node tests/verify_core.mjs && node tests/verify_sw.cjs && node tests/verify_spv2.mjs && node tests/verify_bundle.mjs",
