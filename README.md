@@ -1,5 +1,7 @@
 # StarryPass 星愿令 v2.1 For Production
 
+**简体中文** | [English](README.en.md)
+
 **Made with love ❤️**
 
 > 派生规范与 v2 逐位兼容，密码学原语采用平台原生 Web Crypto、固定版本的 @noble/hashes 与 vendored hash-wasm。
