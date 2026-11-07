@@ -137,6 +137,10 @@ THIRD_PARTY_NOTICES.md  # @noble/hashes + hash-wasm (均 MIT) 许可证
 - **剪贴板与输入防护**：仅响应用户显式复制操作，不自动读取剪贴板；主密码输入框保持 `autocomplete="off"` 等隐私属性。
 - **发布门禁**：CI 依次执行发行包漂移校验、固定向量对拍、双提供方交叉比对与 Chromium 浏览器回归测试，验证全部通过后自动部署 Pages。
 
+## 🌟 另请参阅
+
+[Android version](https://github.com/lingyicute/StarryPassAndroid)
+
 ## 🗂️ License
 
 StarryPass is released under the GNU Affero General Public License v3.0 (AGPLv3).
