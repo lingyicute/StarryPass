@@ -127,7 +127,13 @@ function lenPrefixed(bytes) {
  * Mature primitives                                                   *
  * ------------------------------------------------------------------ */
 
-const subtle = () => globalThis.crypto.subtle;
+// crypto.subtle only exists in secure contexts (HTTPS / localhost). Fail with a
+// stable code instead of an opaque TypeError so the UI can explain the cause.
+const subtle = () => {
+    const api = globalThis.crypto && globalThis.crypto.subtle;
+    if (!api) throw new Error('WEBCRYPTO_UNAVAILABLE');
+    return api;
+};
 
 async function sha256(bytes) {
     const d = await subtle().digest('SHA-256', bytes);
