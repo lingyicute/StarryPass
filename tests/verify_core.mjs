@@ -385,6 +385,14 @@ for(const lane of ['wasm','noble-local','noble-worker']) {
     await noWarnEngine.wipeSession();
 }
 
+// Insecure contexts have no crypto.subtle: report a stable error code, not a TypeError.
+{
+    const f=fixture({crypto:{getRandomValues:bytes=>bytes}});const e=f.spv2CoreFactory(null,false);
+    await reject(e.derive(args),/^Error: WEBCRYPTO_UNAVAILABLE$/);
+    await reject(e.derive(args),/WEBCRYPTO_UNAVAILABLE/);
+    await e.wipeSession();
+}
+
 // An explicit forcePureJs request must bypass a gate-approved WASM provider,
 // while the default engine still uses it.
 {
