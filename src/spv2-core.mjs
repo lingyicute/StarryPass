@@ -169,10 +169,10 @@ function validateSessionKey(output) {
  * already off the UI thread); everywhere else we run the async variant
  * which yields periodically so the page stays responsive.
  */
-function argon2idDerive(params, inWorker) {
+function argon2idDerive(params, inWorker, pureJs) {
     let pending;
     try {
-        pending = startArgon2id(params, inWorker);
+        pending = startArgon2id(params, inWorker, pureJs);
     } catch (err) {
         return Promise.reject(classifyKdfError(err));
     }
@@ -194,8 +194,8 @@ function classifyKdfError(err) {
     return err;
 }
 
-function startArgon2id({ password, salt, ad, memoryKiB, passes, parallelism, tagLength }, inWorker) {
-    if (wasmProviderEnabled && hashwasmArgon2id) {
+function startArgon2id({ password, salt, ad, memoryKiB, passes, parallelism, tagLength }, inWorker, pureJs) {
+    if (!pureJs && wasmProviderEnabled && hashwasmArgon2id) {
         return hashwasmArgon2id({
             password,
             salt,
@@ -510,8 +510,11 @@ function canonicalizeInputs(req) {
  * Engine                                                              *
  * ------------------------------------------------------------------ */
 
-export function spv2CoreFactory(workerGlobal, _forcePureJs) {
+export function spv2CoreFactory(workerGlobal, forcePureJs) {
     const inWorker = !!(workerGlobal && typeof workerGlobal.postMessage === 'function');
+    // Same contract as the original core: `true` pins this engine to the
+    // pure-JS provider even when the WASM provider passed the boot gate.
+    const pureJs = forcePureJs === true;
 
     let cachedTag = null;
     let cachedSk = null;
@@ -569,7 +572,7 @@ export function spv2CoreFactory(workerGlobal, _forcePureJs) {
                     password: inp.masterBytes, salt, ad: DOMAIN_AD,
                     memoryKiB: inp.tierSpec.memoryKiB, passes: inp.tierSpec.passes,
                     parallelism: inp.tierSpec.parallelism, tagLength: 32,
-                }, inWorker);
+                }, inWorker, pureJs);
                 assertCurrent(epoch);
             }
             zeroize(inp.masterBytes);
@@ -632,7 +635,7 @@ export function spv2CoreFactory(workerGlobal, _forcePureJs) {
             return enqueue(async () => { wipeSession(); });
         },
         /* Which Argon2id provider won the boot cross-KAT (diagnostics). */
-        provider: () => (wasmProviderEnabled ? 'hash-wasm' : 'noble-hashes'),
+        provider: () => (!pureJs && wasmProviderEnabled ? 'hash-wasm' : 'noble-hashes'),
     };
 
     if (inWorker) {

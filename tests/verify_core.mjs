@@ -385,4 +385,22 @@ for(const lane of ['wasm','noble-local','noble-worker']) {
     await noWarnEngine.wipeSession();
 }
 
+// An explicit forcePureJs request must bypass a gate-approved WASM provider,
+// while the default engine still uses it.
+{
+    const kat=Uint8Array.from(Buffer.from('0d640df58d78766c08c037a34a8b53c9d01ef0452d75b65eb52520e96b01e659','hex'));
+    let wasmCalls=0;
+    const provider={argon2id:async opts=>{if(opts.memorySize===32)return kat.slice();wasmCalls++;return new Uint8Array(32).fill(7);}};
+    const f=fixture({provider});
+    const wasm=f.spv2CoreFactory(null,false),pure=f.spv2CoreFactory(null,true),loose=f.spv2CoreFactory(null,'true');
+    const wasmPwd=(await wasm.derive(args)).password;
+    check(wasm.provider()==='hash-wasm'&&wasmCalls===1,'default engine uses the gated WASM provider');
+    const purePwd=(await pure.derive(args)).password;
+    check(pure.provider()==='noble-hashes'&&wasmCalls===1&&f.calls()===1,'forcePureJs engine never calls the WASM provider');
+    check(purePwd!==wasmPwd,'forced pure-JS derivation really ran through the noble path');
+    await loose.derive(args);
+    check(loose.provider()==='hash-wasm'&&wasmCalls===2,'only boolean true forces pure JS');
+    await Promise.all([wasm.wipeSession(),pure.wipeSession(),loose.wipeSession()]);
+}
+
 console.log(`PASS production core: ${checks} cache, CSPRNG, cleanup, provider and async-wipe checks`);
