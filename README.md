@@ -32,7 +32,7 @@
 | HKDF-SHA-256 (RFC 5869) | 手写实现 | **Web Crypto** `crypto.subtle.deriveBits`（原生 HKDF） |
 | Argon2id v1.3 (RFC 9106) | 手写 JS + 手工汇编 WASM 双路径 | **vendored hash-wasm 4.12.0**（WASM 主路径）+ **@noble/hashes 2.4.0**（MIT，成熟广泛审计的纯 JS 回退实现） |
 | BLAKE2b | 手写实现 | 不再需要（仅 Argon2 内部使用，由库负责） |
-| 会话随机数 | `getRandomValues` + `Math.random` 回退 | 强制 `crypto.getRandomValues`，**移除弱回退** |
+| 会话随机数 | `getRandomValues`；不可用时停用会话缓存 | 强制 `crypto.getRandomValues`；不可用时**拒绝派生** |
 | 规范逻辑（NFC 规范化、盐构造、HKDF 流布局、无偏拒绝采样、会话缓存） | — | 严格保持 v2 规范字节布局与输入输出语义，并配备故障恢复、内存清理与并发竞态回归测试 |
 
 **应用层不自行实现密码学原语。** `src/spv2-core.mjs` 的底层密码学运算全部由平台原生 Web Crypto、`crypto.getRandomValues` 以及双 Argon2id 提供方（vendored `hash-wasm` / `@noble/hashes`）完成；域分离、参数序列化、会话缓存与字符合成严格遵循 v2 规范实现，并通过完整的自动化回归测试覆盖。

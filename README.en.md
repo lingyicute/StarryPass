@@ -32,7 +32,7 @@ The stance of this production edition is: **the specification does not change by
 | HKDF-SHA-256 (RFC 5869) | Hand-written | **Web Crypto** `crypto.subtle.deriveBits` (native HKDF) |
 | Argon2id v1.3 (RFC 9106) | Hand-written JS + hand-assembled WASM dual path | **vendored hash-wasm 4.12.0** (primary WASM path) + **@noble/hashes 2.4.0** (MIT, mature and widely audited pure-JS fallback) |
 | BLAKE2b | Hand-written | No longer needed (used only inside Argon2, handled by the libraries) |
-| Session randomness | `getRandomValues` + `Math.random` fallback | `crypto.getRandomValues` is mandatory; the **weak fallback is removed** |
+| Session randomness | `getRandomValues`; session cache disabled when unavailable | `crypto.getRandomValues` is mandatory; derivation is **refused** when unavailable |
 | Spec logic (NFC normalisation, salt construction, HKDF stream layout, unbiased rejection sampling, session cache) | — | Strictly keeps the v2 byte layout and I/O semantics, with fault-recovery, memory-cleanup and concurrency-race regression tests |
 
 **The application layer implements no cryptographic primitives itself.** All low-level cryptography in `src/spv2-core.mjs` is performed by the platform's Web Crypto, `crypto.getRandomValues` and the two Argon2id providers (vendored `hash-wasm` / `@noble/hashes`). Domain separation, parameter serialisation, the session cache and character synthesis follow the v2 spec and are covered by a full automated regression suite.
