@@ -47,7 +47,7 @@
    `assets/js/spv2-core.js` 重跑向量 + 会话缓存 → **通过**；
 4. **运行时自检（沿用原版开机已知答案自检 KAT）** —
    RFC 9106 §5.3 Argon2id KAT（同时覆盖 secret 与 associated data）+ RFC 5869 TC1 HMAC KAT；不通过则拒绝派生；
-5. **移植回归** — 13 条额外固定兼容向量、真正的 NFD/NFC 与 trim 检查；源码/发行包分别在 WASM 与 noble 路径下共 **194 项**比较；核心边界/清理 **339 项**、SW **76 项**，另有 Chromium 浏览器回归（断言数以 `npm run test:browser` 输出为准）。
+5. **移植回归** — 13 条额外固定兼容向量、真正的 NFD/NFC 与 trim 检查；源码/发行包分别在 WASM 与 noble 路径下共 **194 项**比较；核心边界/清理 **341 项**、SW **76 项**，另有 Chromium 浏览器回归（断言数以 `npm run test:browser` 输出为准）。
 
 ```bash
 npm ci
