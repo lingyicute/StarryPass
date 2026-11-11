@@ -273,13 +273,12 @@ async function computeSessionTag(masterBytes, codeBytes, tierId, nonce) {
  * ------------------------------------------------------------------ */
 
 class HkdfStream {
-    constructor(info, codeUnusedGuard) {
+    constructor(info) {
         this.info = info;
         this.ikmKey = null;
         this.blockIdx = 0;
         this.buf = new Uint8Array(0);
         this.pos = 0;
-        void codeUnusedGuard;
     }
 
     async init(sk) {
