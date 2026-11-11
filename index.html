@@ -1374,6 +1374,7 @@
                 pendingPayload = null;
                 showSnackbar('兼容模式已启用（派生稍慢）');
                 if (shouldRetry) refresh();
+                else setBusy(!!debounceTimer);
             }
 
             function startWorker() {
@@ -1532,6 +1533,7 @@
                 clearTimeout(snackbarTimer);
                 snackbar.classList.remove('is-visible');
                 setMasterVisible(false);
+                resetBtn.disabled = !codeInput.value;
                 showEmpty('请输入主密码和代号');
             }
             resetBtn.addEventListener('click', function () {
