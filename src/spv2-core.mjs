@@ -303,6 +303,7 @@ class HkdfStream {
             // native result and the replaced block, not just the last slice.
             const raw = new Uint8Array(bits);
             try {
+                if (raw.length < 32) throw new Error('INVALID_HKDF_OUTPUT');
                 const next = raw.slice(-32);
                 zeroize(this.buf);
                 this.buf = next;
@@ -640,6 +641,7 @@ export function spv2CoreFactory(workerGlobal, forcePureJs) {
             completed = true;
             return { password: pwd, cached: usedCache };
         } finally {
+            if (req) { req.master = ''; req.code = ''; }
             if (inp) { zeroize(inp.masterBytes); zeroize(inp.codeBytes); }
             zeroize(reqTag);
             zeroize(salt);
