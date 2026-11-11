@@ -394,6 +394,14 @@ for(const lane of ['wasm','noble-local','noble-worker']) {
     const noWarnEngine=noWarn.spv2CoreFactory(null,false);
     check((await noWarnEngine.derive(args)).password.length===16,'missing console.warn does not fail noble fallback');
     await noWarnEngine.wipeSession();
+
+    let throwWarn=true;
+    const faultyWarn=fixture({provider:null,console:{warn(){if(throwWarn)throw new Error('INJECTED_warn');}}});
+    const faultyWarnEngine=faultyWarn.spv2CoreFactory(null,false);
+    await reject(faultyWarnEngine.derive(args),/INJECTED_warn/);
+    throwWarn=false;
+    check((await faultyWarnEngine.derive(args)).password.length===16,'rejected wasmGatePromise resets and recovers on retry');
+    await faultyWarnEngine.wipeSession();
 }
 
 // Insecure contexts have no crypto.subtle: report a stable error code, not a TypeError.
