@@ -371,6 +371,17 @@ for(const lane of ['wasm','noble-local','noble-worker']) {
     check((await first).password===baseline.password,'boxed/object fields coerced at call time before queue execution');
     check((await second).password===pinParanoid.password,'boxed/object tier, mode and length coerced to primitives at call time');
     check(tierReads===1&&modeReads===1,'tier and mode objects are evaluated only once at snapshot time');
+    const propReads={master:0,code:0,tier:0,mode:0,counter:0,length:0};
+    const getterReq={
+        get master(){propReads.master++;return args.master;},
+        get code(){propReads.code++;return args.code;},
+        get tier(){propReads.tier++;return args.tier;},
+        get mode(){propReads.mode++;return args.mode;},
+        get counter(){propReads.counter++;return args.counter;},
+        get length(){propReads.length++;return args.length;},
+    };
+    check((await e.derive(getterReq)).password===baseline.password,'getter request derives baseline password');
+    check(Object.values(propReads).every(v=>v===1),'each request property getter is read only once');
     await e.wipeSession();
 
     const katTags=[];

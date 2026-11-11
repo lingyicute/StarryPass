@@ -453,15 +453,22 @@ function runSelfTest(inWorker) {
     return selfTestPromise;
 }
 
-async function argon2idDeriveWithKey(password, salt, key, ad, inWorker) {
+function argon2idDeriveWithKey(password, salt, key, ad, inWorker) {
     const opts = {
         t: 3, m: 32, p: 4, dkLen: 32, version: 0x13,
         key, personalization: ad,
     };
-    const pending = inWorker
-        ? Promise.resolve(argon2id(password, salt, opts))
-        : argon2idAsync(password, salt, { ...opts, asyncTick: 30 });
-    return Promise.resolve(pending).then(validateSessionKey);
+    let pending;
+    try {
+        pending = inWorker
+            ? argon2id(password, salt, opts)
+            : argon2idAsync(password, salt, { ...opts, asyncTick: 30 });
+    } catch (err) {
+        return Promise.reject(classifyKdfError(err));
+    }
+    return Promise.resolve(pending).then(validateSessionKey, (err) => {
+        throw classifyKdfError(err);
+    });
 }
 
 /* ------------------------------------------------------------------ *
@@ -484,27 +491,39 @@ function clampParam(val, min, max, fallback) {
     return Math.max(min, Math.min(max, n));
 }
 
-function canonicalizeInputs(req) {
+function snapshotRequest(req) {
     if (!req || typeof req !== 'object') throw new TypeError('INVALID_REQUEST');
-    if (typeof req.master === 'symbol' || typeof req.code === 'symbol'
-            || typeof req.counter === 'symbol' || typeof req.length === 'symbol') {
+    const rawMaster = req.master, rawCode = req.code;
+    const rawCounter = req.counter, rawLength = req.length;
+    if (typeof rawMaster === 'symbol' || typeof rawCode === 'symbol'
+            || typeof rawCounter === 'symbol' || typeof rawLength === 'symbol') {
         throw new TypeError('INVALID_INPUT');
     }
-    const masterNorm = String(req.master || '').normalize('NFC');
-    const codeNorm   = String(req.code || '').trim().normalize('NFC');
     // Keep the production golden-set fallback contract; never select a
     // prototype property such as constructor/__proto__ as a mode or tier.
-    const tierKey = req.tier == null || typeof req.tier === 'symbol' ? '' : String(req.tier);
-    const modeKey = req.mode == null || typeof req.mode === 'symbol' ? '' : String(req.mode);
-    const tierSpec = Object.prototype.hasOwnProperty.call(TIERS, tierKey) ? TIERS[tierKey] : TIERS.standard;
-    const counter = clampParam(req.counter, 1, 9999, 1);
-    const length  = clampParam(req.length, 4, 64, 16);
-    const mode = Object.prototype.hasOwnProperty.call(MODES, modeKey) ? modeKey : 'full';
+    const rawTier = req.tier, rawMode = req.mode;
+    const tierKey = rawTier == null || typeof rawTier === 'symbol' ? '' : String(rawTier);
+    const modeKey = rawMode == null || typeof rawMode === 'symbol' ? '' : String(rawMode);
+    return {
+        master: String(rawMaster || ''),
+        code: String(rawCode || ''),
+        tier: Object.prototype.hasOwnProperty.call(TIERS, tierKey) ? tierKey : 'standard',
+        counter: clampParam(rawCounter, 1, 9999, 1),
+        length: clampParam(rawLength, 4, 64, 16),
+        mode: Object.prototype.hasOwnProperty.call(MODES, modeKey) ? modeKey : 'full',
+    };
+}
+
+function canonicalizeInputs(req) {
+    const snap = snapshotRequest(req);
+    const masterNorm = snap.master.normalize('NFC');
+    const codeNorm   = snap.code.trim().normalize('NFC');
+    const tierSpec = TIERS[snap.tier];
     let masterBytes, codeBytes;
     try {
         masterBytes = encoder.encode(masterNorm);
         codeBytes = encoder.encode(codeNorm);
-        return { masterBytes, codeBytes, tierSpec, counter, length, mode };
+        return { masterBytes, codeBytes, tierSpec, counter: snap.counter, length: snap.length, mode: snap.mode };
     } catch (err) {
         zeroize(masterBytes);
         zeroize(codeBytes);
@@ -616,21 +635,7 @@ export function spv2CoreFactory(workerGlobal, forcePureJs) {
                 // Capture the six request fields now, not after an async KAT
                 // or earlier queued job. Reusing a caller's request object
                 // must not silently change a previously requested password.
-                if (!req || typeof req !== 'object') throw new TypeError('INVALID_REQUEST');
-                if (typeof req.master === 'symbol' || typeof req.code === 'symbol'
-                        || typeof req.counter === 'symbol' || typeof req.length === 'symbol') {
-                    throw new TypeError('INVALID_INPUT');
-                }
-                const tier = req.tier == null || typeof req.tier === 'symbol' ? '' : String(req.tier);
-                const mode = req.mode == null || typeof req.mode === 'symbol' ? '' : String(req.mode);
-                snapshot = {
-                    master: String(req.master || ''),
-                    code: String(req.code || ''),
-                    tier: Object.prototype.hasOwnProperty.call(TIERS, tier) ? tier : 'standard',
-                    counter: clampParam(req.counter, 1, 9999, 1),
-                    length: clampParam(req.length, 4, 64, 16),
-                    mode: Object.prototype.hasOwnProperty.call(MODES, mode) ? mode : 'full',
-                };
+                snapshot = snapshotRequest(req);
             } catch (error) {
                 inputError = { error }; // preserve Promise/FIFO and error cleanup
             }
