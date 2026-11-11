@@ -274,6 +274,35 @@ async def test_history_wipes_master(playwright, url, state):
     print('PASS browser: actual BFCache history restore clears master')
 
 
+async def test_clear_inflight(browser, url):
+    context, page = await mock_page(browser, url)
+    try:
+        await fill(page); await page.clock.run_for(300)
+        first = (await requests(page))[-1]
+        await page.evaluate('() => { window.__lateClearReply = __workers[0].onmessage; }')
+        await page.fill('#master-input', '')
+        check(await page.evaluate('__workers[0].terminated'), 'clearing a busy master terminates the old Worker')
+        check(not await page.is_enabled('#copy-btn') and await page.is_hidden('#derive-bar'),
+              'clearing a busy master removes output and busy state immediately')
+        await page.fill('#master-input', 'new master'); await page.clock.run_for(300)
+        check(await page.evaluate('__workers.length') == 2, 're-entry starts a fresh Worker without waiting for the old KDF')
+        latest = (await requests(page))[-1]
+        await page.evaluate("id => __lateClearReply({data: {id, ok:true, password:'LatestResult1!Ab'}})", first['id'])
+        check(not await page.is_enabled('#copy-btn') and not await page.is_hidden('#derive-bar'),
+              'late completion from the terminated Worker cannot finish its replacement')
+        await reply(page, latest)
+        check(await page.is_enabled('#copy-btn'), 'fresh Worker result is usable')
+        await page.fill('#code-input', 'busy-code'); await page.clock.run_for(300)
+        await page.fill('#code-input', '')
+        check(await page.evaluate('__workers[1].terminated'), 'clearing a busy site code also terminates the Worker')
+        await page.fill('#code-input', 'github'); await page.clock.run_for(300)
+        await reply(page, (await requests(page))[-1])
+        check(await page.is_enabled('#copy-btn'), 'derivation recovers after clearing the code')
+    finally:
+        await context.close()
+    print('PASS browser: clear cancels in-flight work and stale replies')
+
+
 async def test_timeout_and_reset(browser, url):
     context, page = await mock_page(browser, url)
     try:
@@ -392,6 +421,18 @@ async def test_async_local_queue(browser, url):
         check(await page.is_enabled('#copy-btn'),'BFCache replacement completes normally')
         await page.fill('#master-input','')
         check(await page.evaluate('__localWipes')>0,'manual clear wipes local engine session key')
+        await page.fill('#master-input','another master'); await page.clock.run_for(300)
+        check(await count()==8, 'new local derivation started')
+        wipes_before = await page.evaluate('__localWipes')
+        await page.fill('#master-input','')
+        check(await page.evaluate('__localWipes') > wipes_before, 'clearing a busy local engine invalidates its session immediately')
+        await page.fill('#master-input','replacement master'); await page.clock.run_for(300)
+        check(await count()==9, 're-entry detaches the stale local UI task')
+        await resolve(7)
+        check(not await page.is_enabled('#copy-btn') and not await page.is_hidden('#derive-bar'),
+              'stale local completion cannot release the replacement task')
+        await resolve(8)
+        check(await page.is_enabled('#copy-btn'), 'replacement local result remains usable')
     finally:
         await context.close()
     print('PASS browser: async Web Crypto queue, reset and BFCache races')
@@ -807,6 +848,7 @@ async def main():
                 try:
                     await test_history_wipes_master(playwright, url, state)
                     await test_queue(browser, url)
+                    await test_clear_inflight(browser, url)
                     await test_timeout_and_reset(browser, url)
                     await test_local_fallback(browser, url)
                     await test_async_local_queue(browser, url)
