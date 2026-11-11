@@ -467,6 +467,10 @@ function runSelfTest(inWorker, pureJs) {
             if (!wasmProviderEnabled && typeof console === 'object' && console && typeof console.warn === 'function') {
                 console.warn('StarryPass: WASM provider unavailable; using noble-hashes.');
             }
+        }).catch((err) => {
+            wasmProviderEnabled = false;
+            wasmGatePromise = null;
+            throw err;
         });
     }
     return wasmGatePromise;
@@ -608,6 +612,7 @@ export function spv2CoreFactory(workerGlobal, forcePureJs) {
             reqTag = await computeSessionTag(inp.masterBytes, inp.codeBytes, inp.tierSpec.id, getSessionNonce());
             assertCurrent(epoch);
             if (cachedTag && cachedSk && constantTimeEqual(reqTag, cachedTag)) {
+                zeroize(inp.masterBytes);
                 sk = cachedSk;
                 usedCache = true;
                 zeroize(reqTag); reqTag = null;
@@ -621,10 +626,10 @@ export function spv2CoreFactory(workerGlobal, forcePureJs) {
                     memoryKiB: inp.tierSpec.memoryKiB, passes: inp.tierSpec.passes,
                     parallelism: inp.tierSpec.parallelism, tagLength: 32,
                 }, inWorker, pureJs);
+                zeroize(inp.masterBytes);
                 zeroize(salt); salt = null;
                 assertCurrent(epoch);
             }
-            zeroize(inp.masterBytes);
             const pwd = await synthesizePassword(sk, inp.codeBytes, inp.counter, inp.length, inp.mode);
             assertCurrent(epoch);
             // A failed/stale derivation must not publish key material to cache.
