@@ -236,6 +236,8 @@ async function buildSalt(codeBytes, tierId) {
         tierByte = new Uint8Array([tierId]);
         codeFrame = lenPrefixed(codeBytes);
         saltIn = concatBytes([DOMAIN_SALT, codeFrame, tierByte]);
+        zeroize(codeFrame);
+        zeroize(tierByte);
         return await sha256(saltIn);
     } finally {
         zeroize(saltIn);
@@ -255,6 +257,9 @@ async function computeSessionTag(masterBytes, codeBytes, tierId, nonce) {
         masterFrame = lenPrefixed(masterBytes);
         codeFrame = lenPrefixed(codeBytes);
         msg = concatBytes([DOMAIN_CACHE, masterFrame, codeFrame, tierByte]);
+        zeroize(masterFrame);
+        zeroize(codeFrame);
+        zeroize(tierByte);
         return await hmacSha256(nonce, msg);
     } finally {
         zeroize(masterFrame);
@@ -340,6 +345,8 @@ async function synthesizePassword(sk, codeBytes, counter, length, modeName) {
     try {
         codeFrame = lenPrefixed(codeBytes);
         info = concatBytes([DOMAIN_EXPAND, meta, codeFrame]);
+        zeroize(codeFrame);
+        zeroize(meta);
         stream = new HkdfStream(info);
         await stream.init(sk);
         const pool = modeSpec.pool;
@@ -591,6 +598,7 @@ export function spv2CoreFactory(workerGlobal, forcePureJs) {
             if (cachedTag && cachedSk && constantTimeEqual(reqTag, cachedTag)) {
                 sk = cachedSk;
                 usedCache = true;
+                zeroize(reqTag); reqTag = null;
             } else {
                 zeroize(cachedTag); cachedTag = null;
                 zeroize(cachedSk); cachedSk = null;
@@ -601,6 +609,7 @@ export function spv2CoreFactory(workerGlobal, forcePureJs) {
                     memoryKiB: inp.tierSpec.memoryKiB, passes: inp.tierSpec.passes,
                     parallelism: inp.tierSpec.parallelism, tagLength: 32,
                 }, inWorker, pureJs);
+                zeroize(salt); salt = null;
                 assertCurrent(epoch);
             }
             zeroize(inp.masterBytes);
