@@ -392,9 +392,15 @@ async function synthesizePassword(sk, codeBytes, counter, length, modeName) {
  * FIPS 140-3 style power-on self-test (same two KATs as the original) *
  * ------------------------------------------------------------------ */
 
-let selfTestPromise = null;
+const EXPECTED_ARGON2_KAT = new Uint8Array([
+    0x0d, 0x64, 0x0d, 0xf5, 0x8d, 0x78, 0x76, 0x6c, 0x08, 0xc0, 0x37, 0xa3, 0x4a, 0x8b, 0x53, 0xc9,
+    0xd0, 0x1e, 0xf0, 0x45, 0x2d, 0x75, 0xb6, 0x5e, 0xb5, 0x25, 0x20, 0xe9, 0x6b, 0x01, 0xe6, 0x59,
+]);
 
-function runSelfTest(inWorker) {
+let selfTestPromise = null;
+let wasmGatePromise = null;
+
+function runSelfTest(inWorker, pureJs) {
     if (!selfTestPromise) {
         selfTestPromise = (async () => {
             // 1. RFC 9106 §5.3 Argon2id KAT (exercises secret + AD).
@@ -407,12 +413,8 @@ function runSelfTest(inWorker) {
             let tagK, tcSalt, tcIkm, prk;
             try {
                 tagK = await argon2idDeriveWithKey(p, s, k, x, inWorker);
-                const expectedA2 = [
-                    0x0d, 0x64, 0x0d, 0xf5, 0x8d, 0x78, 0x76, 0x6c, 0x08, 0xc0, 0x37, 0xa3, 0x4a, 0x8b, 0x53, 0xc9,
-                    0xd0, 0x1e, 0xf0, 0x45, 0x2d, 0x75, 0xb6, 0x5e, 0xb5, 0x25, 0x20, 0xe9, 0x6b, 0x01, 0xe6, 0x59,
-                ];
-                for (let i = 0; i < 32; i++) {
-                    if (tagK[i] !== expectedA2[i]) throw new Error('KAT_ARGON2ID_FAILED');
+                if (!constantTimeEqual(tagK, EXPECTED_ARGON2_KAT)) {
+                    throw new Error('KAT_ARGON2ID_FAILED');
                 }
 
                 // 2. RFC 5869 TC1 HMAC/SHA-256 KAT (first 8 bytes of PRK).
@@ -423,41 +425,51 @@ function runSelfTest(inWorker) {
                 for (let j = 0; j < 8; j++) {
                     if (prk[j] !== expectedPrk8[j]) throw new Error('KAT_SHA256_FAILED');
                 }
-
-                // 3. Cross-provider gate: the vendored hash-wasm (WASM) fast
-                //    path is enabled only if it reproduces the same vector
-                //    byte for byte. Mismatch disables the fast path.
-                wasmProviderEnabled = false;
-                if (hashwasmArgon2id) {
-                    let hwBytes;
-                    try {
-                        const hwTag = await hashwasmArgon2id({
-                            password: p, salt: s, secret: k, ad: x,
-                            parallelism: 4, iterations: 3, memorySize: 32,
-                            hashLength: 32, outputType: 'binary',
-                        });
-                        hwBytes = validateSessionKey(hwTag);
-                        wasmProviderEnabled = constantTimeEqual(hwBytes, tagK);
-                    } catch {
-                        wasmProviderEnabled = false;
-                    } finally {
-                        zeroize(hwBytes);
-                    }
-                }
-                if (!wasmProviderEnabled && typeof console === 'object' && console && typeof console.warn === 'function') {
-                    console.warn('StarryPass: WASM provider unavailable; using noble-hashes.');
-                }
             } finally {
                 zeroize(p); zeroize(s); zeroize(k); zeroize(x);
                 zeroize(tagK); zeroize(tcSalt); zeroize(tcIkm); zeroize(prk);
             }
         })().catch((err) => {
             wasmProviderEnabled = false;
+            wasmGatePromise = null;
             selfTestPromise = null; // allow retry on transient failure
             throw err;
         });
     }
-    return selfTestPromise;
+    if (pureJs) return selfTestPromise;
+    if (!wasmGatePromise) {
+        wasmGatePromise = selfTestPromise.then(async () => {
+            // 3. Cross-provider gate: the vendored hash-wasm (WASM) fast
+            //    path is enabled only if it reproduces the same vector
+            //    byte for byte. Mismatch disables the fast path.
+            wasmProviderEnabled = false;
+            if (hashwasmArgon2id) {
+                const p = new Uint8Array(32).fill(1);
+                const s = new Uint8Array(16).fill(2);
+                const k = new Uint8Array(8).fill(3);
+                const x = new Uint8Array(12).fill(4);
+                let hwBytes;
+                try {
+                    const hwTag = await hashwasmArgon2id({
+                        password: p, salt: s, secret: k, ad: x,
+                        parallelism: 4, iterations: 3, memorySize: 32,
+                        hashLength: 32, outputType: 'binary',
+                    });
+                    hwBytes = validateSessionKey(hwTag);
+                    wasmProviderEnabled = constantTimeEqual(hwBytes, EXPECTED_ARGON2_KAT);
+                } catch {
+                    wasmProviderEnabled = false;
+                } finally {
+                    zeroize(p); zeroize(s); zeroize(k); zeroize(x);
+                    zeroize(hwBytes);
+                }
+            }
+            if (!wasmProviderEnabled && typeof console === 'object' && console && typeof console.warn === 'function') {
+                console.warn('StarryPass: WASM provider unavailable; using noble-hashes.');
+            }
+        });
+    }
+    return wasmGatePromise;
 }
 
 function argon2idDeriveWithKey(password, salt, key, ad, inWorker) {
@@ -588,7 +600,7 @@ export function spv2CoreFactory(workerGlobal, forcePureJs) {
         let usedCache = false, completed = false;
         try {
             assertCurrent(epoch);
-            await runSelfTest(inWorker);
+            await runSelfTest(inWorker, pureJs);
             assertCurrent(epoch);
             if (inputError) throw inputError.error;
             inp = encodeSnapshot(req);
