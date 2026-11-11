@@ -312,7 +312,7 @@ class HkdfStream {
     async uniformInt(n) {
         const limit = 256 - (256 % n);
         for (;;) {
-            const b = await this.nextByte();
+            const b = this.pos < this.buf.length ? this.buf[this.pos++] : await this.nextByte();
             if (b < limit) return b % n;
         }
     }
@@ -420,6 +420,7 @@ function runSelfTest(inWorker) {
                 // 3. Cross-provider gate: the vendored hash-wasm (WASM) fast
                 //    path is enabled only if it reproduces the same vector
                 //    byte for byte. Mismatch disables the fast path.
+                wasmProviderEnabled = false;
                 if (hashwasmArgon2id) {
                     let hwBytes;
                     try {
@@ -513,8 +514,7 @@ function snapshotRequest(req) {
     };
 }
 
-function canonicalizeInputs(req) {
-    const snap = snapshotRequest(req);
+function encodeSnapshot(snap) {
     const masterNorm = snap.master.normalize('NFC');
     const codeNorm   = snap.code.trim().normalize('NFC');
     const tierSpec = TIERS[snap.tier];
@@ -528,6 +528,10 @@ function canonicalizeInputs(req) {
         zeroize(codeBytes);
         throw err;
     }
+}
+
+function canonicalizeInputs(req) {
+    return encodeSnapshot(snapshotRequest(req));
 }
 
 /* ------------------------------------------------------------------ *
@@ -580,7 +584,7 @@ export function spv2CoreFactory(workerGlobal, forcePureJs) {
             await runSelfTest(inWorker);
             assertCurrent(epoch);
             if (inputError) throw inputError.error;
-            inp = canonicalizeInputs(req);
+            inp = encodeSnapshot(req);
             if (!inp.masterBytes.length || !inp.codeBytes.length) throw new Error('EMPTY_INPUT');
             reqTag = await computeSessionTag(inp.masterBytes, inp.codeBytes, inp.tierSpec.id, getSessionNonce());
             assertCurrent(epoch);
