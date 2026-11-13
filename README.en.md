@@ -45,7 +45,7 @@ Compatibility is not claimed, it is cross-checked against the original implement
 2. **Golden set** — `tests/golden.json` (the original 44 cases, unchanged; covering Unicode, counter/length boundary clamping, unknown mode/tier fallbacks, mode boundaries, the paranoid tier and empty-input errors) → **all bit-identical**.
 3. **Bundle-level tests** — `tests/verify_bundle.mjs` loads the release file `assets/js/spv2-core.js` directly and re-runs the vectors plus the session cache → **pass**.
 4. **Runtime self-test (the original power-on known-answer test, kept)** — the RFC 9106 §5.3 Argon2id KAT (covering both secret and associated data) plus the RFC 5869 TC1 HMAC KAT; derivation is refused if either fails.
-5. **Port regressions** — 13 additional fixed compatibility vectors, genuine NFD/NFC and trim checks; the source and the release bundle are compared **194 times** in total across the WASM and noble paths; core boundary/cleanup **341** checks, service worker **76** checks, plus Chromium browser regressions (the number of assertions is whatever `npm run test:browser` prints).
+5. **Port regressions** — 13 additional fixed compatibility vectors, genuine NFD/NFC and trim checks; the source and the release bundle are compared **194 times** in total across the WASM and noble paths; core boundary/cleanup **350** checks, service worker **77** checks, plus Chromium browser regressions (the number of assertions is whatever `npm run test:browser` prints).
 
 ```bash
 npm ci
