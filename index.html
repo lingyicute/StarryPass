@@ -1255,6 +1255,8 @@
                 if (code === 'MEMORY_LIMIT') return state.tier === 'paranoid' ? '内存不足，请改用「标准」档' : '内存不足，请关闭其他标签页后重试';
                 if (code === 'WEBCRYPTO_UNAVAILABLE') return '请通过 HTTPS 或 localhost 打开本页';
                 if (code === 'RNG_UNAVAILABLE') return '当前浏览器无法提供安全随机数，已拒绝派生';
+                // 自检失败与输入无关，重试不会改变结果。
+                if (typeof code === 'string' && code.indexOf('KAT_') === 0) return '运行环境自检未通过，已拒绝派生';
                 return '派生失败，请重试';
             }
 
