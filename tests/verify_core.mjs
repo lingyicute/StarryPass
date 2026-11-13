@@ -430,4 +430,28 @@ for(const lane of ['wasm','noble-local','noble-worker']) {
     await Promise.all([wasm.wipeSession(),pure.wipeSession(),loose.wipeSession()]);
 }
 
+{
+    // Worker + pure JS: without a JIT noble can run for minutes, so the Worker
+    // reports progress (at most once a second) for the page's stall watchdog.
+    const realNow = Date.now; let fake = 0;
+    const kdf = (password, salt, opts) => {
+        if (opts.m === 32) return argon2id(password, salt, opts); // actual RFC KAT
+        for (let i = 0; i < 6; i++) { fake += 400; if (opts.onProgress) opts.onProgress(i / 6); }
+        return new Uint8Array(32).fill(9);
+    };
+    const messages = [], worker = { postMessage: value => messages.push(value) };
+    loadCore({ argon2id: kdf, provider: null }).spv2CoreFactory(worker, false);
+    Date.now = () => fake;
+    try {
+        worker.onmessage({ data: { ...args, id: 501, type: 'derive', heartbeat: true } });
+        for (let n = 0; !messages.some(x => x.id === 501 && x.ok !== undefined); n++) { assert.ok(n < 1000); await new Promise(r => setTimeout(r, 1)); }
+        worker.onmessage({ data: { ...args, master: args.master + '!', id: 502, type: 'derive' } });
+        for (let n = 0; !messages.some(x => x.id === 502); n++) { assert.ok(n < 1000); await new Promise(r => setTimeout(r, 1)); }
+    } finally { Date.now = realNow; }
+    const beats = messages.filter(x => x.type === 'progress');
+    check(beats.length === 2 && beats.every(x => x.id === 501), 'pure-JS Worker heartbeats are throttled to one per second');
+    check(messages[2].id === 501 && messages[2].ok === true, 'heartbeats precede the single derive result');
+    check(messages.length === 4 && messages[3].id === 502 && messages[3].ok === true, 'no heartbeat unless the page opts in');
+}
+
 console.log(`PASS production core: ${checks} cache, CSPRNG, cleanup, provider and async-wipe checks`);

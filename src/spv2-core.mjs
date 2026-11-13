@@ -175,10 +175,10 @@ function validateSessionKey(output) {
  * already off the UI thread); everywhere else we run the async variant
  * which yields periodically so the page stays responsive.
  */
-function argon2idDerive(params, inWorker, pureJs) {
+function argon2idDerive(params, inWorker, pureJs, onProgress) {
     let pending;
     try {
-        pending = startArgon2id(params, inWorker, pureJs);
+        pending = startArgon2id(params, inWorker, pureJs, onProgress);
     } catch (err) {
         return Promise.reject(classifyKdfError(err));
     }
@@ -200,7 +200,7 @@ function classifyKdfError(err) {
     return err;
 }
 
-function startArgon2id({ password, salt, ad, memoryKiB, passes, parallelism, tagLength }, inWorker, pureJs) {
+function startArgon2id({ password, salt, ad, memoryKiB, passes, parallelism, tagLength }, inWorker, pureJs, onProgress) {
     if (!pureJs && wasmProviderEnabled && hashwasmArgon2id) {
         return hashwasmArgon2id({
             password,
@@ -222,7 +222,7 @@ function startArgon2id({ password, salt, ad, memoryKiB, passes, parallelism, tag
         personalization: ad,
     };
     return inWorker
-        ? argon2id(password, salt, opts)
+        ? argon2id(password, salt, onProgress ? { ...opts, onProgress } : opts)
         : argon2idAsync(password, salt, { ...opts, asyncTick: 30 });
 }
 
@@ -600,7 +600,7 @@ export function spv2CoreFactory(workerGlobal, forcePureJs) {
         if (epoch !== generation) throw new Error('SESSION_WIPED');
     }
 
-    async function deriveOnce(req, epoch, inputError) {
+    async function deriveOnce(req, epoch, inputError, onProgress) {
         let inp, reqTag, salt, sk;
         let usedCache = false, completed = false;
         try {
@@ -626,7 +626,7 @@ export function spv2CoreFactory(workerGlobal, forcePureJs) {
                     password: inp.masterBytes, salt, ad: DOMAIN_AD,
                     memoryKiB: inp.tierSpec.memoryKiB, passes: inp.tierSpec.passes,
                     parallelism: inp.tierSpec.parallelism, tagLength: 32,
-                }, inWorker, pureJs);
+                }, inWorker, pureJs, onProgress);
                 zeroize(inp.masterBytes);
                 zeroize(salt); salt = null;
                 assertCurrent(epoch);
@@ -659,7 +659,7 @@ export function spv2CoreFactory(workerGlobal, forcePureJs) {
     }
 
     const api = {
-        derive: (req) => {
+        derive: (req, onProgress) => {
             const epoch = generation;
             let snapshot, inputError;
             try {
@@ -670,7 +670,8 @@ export function spv2CoreFactory(workerGlobal, forcePureJs) {
             } catch (error) {
                 inputError = { error }; // preserve Promise/FIFO and error cleanup
             }
-            return enqueue(() => deriveOnce(snapshot, epoch, inputError));
+            return enqueue(() => deriveOnce(snapshot, epoch, inputError,
+                typeof onProgress === 'function' ? onProgress : null));
         },
         wipeSession: () => {
             generation++; // immediately invalidate active and already queued work
@@ -682,11 +683,12 @@ export function spv2CoreFactory(workerGlobal, forcePureJs) {
 
     if (inWorker) {
         workerGlobal.onmessage = function (ev) {
-            let data, id, type;
+            let data, id, type, heartbeat;
             try {
                 data = (ev && ev.data) || {};
                 id = data.id;
                 type = data.type;
+                heartbeat = data.heartbeat === true;
             } catch (err) {
                 workerGlobal.postMessage({
                     id, ok: false,
@@ -702,7 +704,19 @@ export function spv2CoreFactory(workerGlobal, forcePureJs) {
                 return;
             }
             if (type === 'derive') {
-                api.derive(data).then((res) => {
+                // The synchronous noble fallback can take minutes without a JIT
+                // (e.g. Lockdown Mode). Heartbeat at most once a second so the
+                // page watchdog can tell a slow derivation from a stalled one.
+                // Sent only when the page opts in: a cached older page would
+                // mistake the unknown message for a failed result.
+                let lastBeat = Date.now();
+                const beat = () => {
+                    const now = Date.now();
+                    if (now - lastBeat < 1000) return;
+                    lastBeat = now;
+                    try { workerGlobal.postMessage({ id, type: 'progress' }); } catch { /* best effort */ }
+                };
+                api.derive(data, heartbeat ? beat : null).then((res) => {
                     workerGlobal.postMessage({ id, ok: true, password: res.password, cached: res.cached });
                 }, (err) => {
                     workerGlobal.postMessage({
