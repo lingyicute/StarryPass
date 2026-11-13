@@ -303,7 +303,8 @@ class HkdfStream {
             // native result and the replaced block, not just the last slice.
             const raw = new Uint8Array(bits);
             try {
-                if (raw.length < 32) throw new Error('INVALID_HKDF_OUTPUT');
+                // Exact length only: slicing a short or long result would yield a misaligned block.
+                if (raw.length !== this.blockIdx * 32) throw new Error('INVALID_HKDF_OUTPUT');
                 const next = raw.slice(-32);
                 zeroize(this.buf);
                 this.buf = next;
