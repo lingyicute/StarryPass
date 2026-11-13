@@ -454,4 +454,27 @@ for(const lane of ['wasm','noble-local','noble-worker']) {
     check(messages.length === 4 && messages[3].id === 502 && messages[3].ok === true, 'no heartbeat unless the page opts in');
 }
 
+// HKDF output must have exactly the requested length: a short or long native result
+// would otherwise be sliced into a misaligned block and silently change the password.
+for (const delta of [-8, 8]) {
+    const f = fixture();
+    const native = f.crypto.subtle.deriveBits;
+    const outputs = [];
+    f.crypto.subtle.deriveBits = async (alg, key, bits) => {
+        const out = new Uint8Array(await native(alg, key, bits));
+        if (bits <= 256) return out.buffer;
+        const bad = new Uint8Array(out.length + delta);
+        bad.set(out.subarray(0, Math.min(out.length, bad.length)));
+        out.fill(0);
+        outputs.push(bad);
+        return bad.buffer;
+    };
+    const stream = new f.HkdfStream(new Uint8Array([1, 2, 3]));
+    await stream.init(new Uint8Array(32).fill(7));
+    for (let i = 0; i < 32; i++) await stream.nextByte();
+    await reject(stream.nextByte(), /INVALID_HKDF_OUTPUT/);
+    check(outputs.length === 1 && outputs.every(zero), 'rejected HKDF output is cleared');
+    stream.dispose();
+}
+
 console.log(`PASS production core: ${checks} cache, CSPRNG, cleanup, provider and async-wipe checks`);
