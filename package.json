@@ -1,7 +1,7 @@
 {
   "name": "starrypass-production",
   "version": "2.1.0",
-  "description": "StarryPass v2.1 for production — bit-compatible with the original hand-rolled derivation, implemented entirely on mature, audited primitives (Web Crypto + @noble/hashes).",
+  "description": "StarryPass v2.1 for production — bit-compatible with the original hand-rolled derivation, implemented entirely on mature, audited primitives (Web Crypto, hash-wasm + @noble/hashes).",
   "type": "module",
   "license": "AGPL-3.0-or-later",
   "author": "lingyicute",

@@ -96,7 +96,7 @@ Security gate (not a mere feature-detect):
 ```
 index.html              # main page
 service-worker.js       # cache control
-assets/js/spv2-core.js  # release artifact: production core bundled by esbuild (includes @noble/hashes)
+assets/js/spv2-core.js  # release artifact: production core bundled by esbuild (includes @noble/hashes and hash-wasm)
 assets/js/spv2-worker.js# loads the core via importScripts (same as the original)
 src/spv2-core.mjs       # core source (readable, build entry point)
 vendor/hash-wasm/       # vendored hash-wasm@4.12.0 + `ad` patch build (PROVENANCE.md)
