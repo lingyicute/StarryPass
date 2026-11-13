@@ -102,7 +102,7 @@ hash-wasm（WASM，含 `ad` 关联数据支持补丁）**，构建来源与校�
 ```
 index.html              # 主页面
 service-worker.js       # 缓存控制
-assets/js/spv2-core.js  # 发行产物：esbuild 打包的生产核心（含 @noble/hashes）
+assets/js/spv2-core.js  # 发行产物：esbuild 打包的生产核心（含 @noble/hashes 与 hash-wasm）
 assets/js/spv2-worker.js# importScripts 装载核心（与原版一致）
 src/spv2-core.mjs       # 核心源码（可读版，构建入口）
 vendor/hash-wasm/       # vendored hash-wasm@4.12.0 + ad 补丁构建（PROVENANCE.md）
