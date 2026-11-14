@@ -135,9 +135,24 @@ const subtle = () => {
     return api;
 };
 
+function validateCryptoBytes(output, expectedLen, errCode) {
+    if (!(output instanceof ArrayBuffer)) {
+        if (ArrayBuffer.isView(output)) {
+            zeroize(new Uint8Array(output.buffer, output.byteOffset, output.byteLength));
+        }
+        throw new Error(errCode);
+    }
+    const bytes = new Uint8Array(output);
+    if (bytes.length !== expectedLen) {
+        zeroize(bytes);
+        throw new Error(errCode);
+    }
+    return bytes;
+}
+
 async function sha256(bytes) {
     const d = await subtle().digest('SHA-256', bytes);
-    return new Uint8Array(d);
+    return validateCryptoBytes(d, 32, 'INVALID_CRYPTO_OUTPUT');
 }
 
 async function hmacSha256(keyBytes, dataBytes) {
@@ -145,7 +160,7 @@ async function hmacSha256(keyBytes, dataBytes) {
         'raw', keyBytes, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
     );
     const sig = await subtle().sign('HMAC', key, dataBytes);
-    return new Uint8Array(sig);
+    return validateCryptoBytes(sig, 32, 'INVALID_CRYPTO_OUTPUT');
 }
 
 function validateSessionKey(output) {
@@ -299,18 +314,10 @@ class HkdfStream {
                 this.ikmKey,
                 nextIdx * 32 * 8
             );
-            if (!(bits instanceof ArrayBuffer)) {
-                if (ArrayBuffer.isView(bits)) {
-                    zeroize(new Uint8Array(bits.buffer, bits.byteOffset, bits.byteLength));
-                }
-                throw new Error('INVALID_HKDF_OUTPUT');
-            }
             // deriveBits also returns all preceding blocks: erase that full
             // native result and the replaced block, not just the last slice.
-            const raw = new Uint8Array(bits);
+            const raw = validateCryptoBytes(bits, nextIdx * 32, 'INVALID_HKDF_OUTPUT');
             try {
-                // Exact length only: slicing a short or long result would yield a misaligned block.
-                if (raw.length !== nextIdx * 32) throw new Error('INVALID_HKDF_OUTPUT');
                 const next = raw.slice(-32);
                 zeroize(this.buf);
                 this.buf = next;

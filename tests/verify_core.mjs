@@ -543,4 +543,19 @@ for (const delta of [-8, 8]) {
     await Promise.all([e1.wipeSession(), e2.wipeSession(), e3.wipeSession()]);
 }
 
+// SHA-256 and HMAC-SHA-256 outputs must also be exact 32-byte ArrayBuffers.
+for (const op of ['digest', 'sign']) {
+    const shortBuf = new Uint8Array(16).fill(0x33).buffer;
+    const wrongView = new Uint8Array(32).fill(0x44);
+    for (const bad of [32, shortBuf, wrongView]) {
+        const f = fixture();
+        const e = f.spv2CoreFactory(null, false);
+        await e.derive(args);
+        f.crypto.subtle[op] = async () => bad;
+        await reject(e.derive({ ...args, master: 'bad-' + op }), /INVALID_CRYPTO_OUTPUT/);
+        await e.wipeSession();
+    }
+    check(zero(new Uint8Array(shortBuf)) && zero(wrongView), op + ' clears malformed outputs');
+}
+
 console.log(`PASS production core: ${checks} cache, CSPRNG, cleanup, provider and async-wipe checks`);
