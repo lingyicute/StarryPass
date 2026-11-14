@@ -477,4 +477,37 @@ for (const delta of [-8, 8]) {
     stream.dispose();
 }
 
+// A stale wasmGatePromise rejection must not clear a retry gate started after selfTestPromise reset.
+{
+    const kat = argon2id(new Uint8Array(32).fill(1), new Uint8Array(16).fill(2),
+        { t: 3, m: 32, p: 4, dkLen: 32, version: 0x13, key: new Uint8Array(8).fill(3), personalization: new Uint8Array(12).fill(4) });
+    let wasmKatCalls = 0;
+    const gate = pause();
+    const f = fixture({
+        provider: {
+            argon2id: async (opts) => {
+                if (opts.memorySize === 32) { wasmKatCalls++; await gate.promise; return kat.slice(); }
+                return new Uint8Array(32).fill(11);
+            },
+        },
+    });
+    const e1 = f.spv2CoreFactory(null, false), e2 = f.spv2CoreFactory(null, false), e3 = f.spv2CoreFactory(null, false);
+    const nativeSign = f.crypto.subtle.sign;
+    let firstSign = true, retryPromise;
+    f.crypto.subtle.sign = async (...vals) => {
+        if (firstSign) {
+            firstSign = false;
+            Promise.resolve().then(() => Promise.resolve()).then(() => { retryPromise = e2.derive(args); });
+            throw new Error('INJECTED_transient_sign');
+        }
+        return nativeSign(...vals);
+    };
+    await reject(e1.derive(args), /INJECTED_transient_sign/);
+    const thirdPromise = e3.derive(args);
+    gate.resolve();
+    await Promise.all([retryPromise, thirdPromise]);
+    check(wasmKatCalls === 1 && e3.provider() === 'hash-wasm', 'stale gate rejection does not clobber an active retry gate');
+    await Promise.all([e1.wipeSession(), e2.wipeSession(), e3.wipeSession()]);
+}
+
 console.log(`PASS production core: ${checks} cache, CSPRNG, cleanup, provider and async-wipe checks`);
