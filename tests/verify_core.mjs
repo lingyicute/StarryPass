@@ -452,6 +452,23 @@ for(const lane of ['wasm','noble-local','noble-worker']) {
     check(beats.length === 2 && beats.every(x => x.id === 501), 'pure-JS Worker heartbeats are throttled to one per second');
     check(messages[2].id === 501 && messages[2].ok === true, 'heartbeats precede the single derive result');
     check(messages.length === 4 && messages[3].id === 502 && messages[3].ok === true, 'no heartbeat unless the page opts in');
+
+    // A backward wall-clock jump (e.g. NTP sync) must reset the throttle baseline rather than silencing heartbeats.
+    const backMsgs = [], backWorker = { postMessage: value => backMsgs.push(value) };
+    let clock = 100000;
+    const backKdf = (password, salt, opts) => {
+        if (opts.m === 32) return argon2id(password, salt, opts);
+        clock = 50000;
+        for (let i = 0; i < 3; i++) { clock += 1200; if (opts.onProgress) opts.onProgress(i / 3); }
+        return new Uint8Array(32).fill(9);
+    };
+    loadCore({ argon2id: backKdf, provider: null, console: { warn() {} } }).spv2CoreFactory(backWorker, false);
+    Date.now = () => clock;
+    try {
+        backWorker.onmessage({ data: { ...args, id: 503, type: 'derive', heartbeat: true } });
+        for (let n = 0; !backMsgs.some(x => x.id === 503 && x.ok !== undefined); n++) { assert.ok(n < 1000); await new Promise(r => setTimeout(r, 1)); }
+    } finally { Date.now = realNow; }
+    check(backMsgs.filter(x => x.type === 'progress').length === 3, 'backward clock jump still emits Worker progress heartbeats');
 }
 
 // HKDF output must have exactly the requested length: a short or long native result

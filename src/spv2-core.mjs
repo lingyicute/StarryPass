@@ -726,7 +726,7 @@ export function spv2CoreFactory(workerGlobal, forcePureJs) {
                 let lastBeat = Date.now();
                 const beat = () => {
                     const now = Date.now();
-                    if (now - lastBeat < 1000) return;
+                    if (now >= lastBeat && now - lastBeat < 1000) return;
                     lastBeat = now;
                     try { workerGlobal.postMessage({ id, type: 'progress' }); } catch { /* best effort */ }
                 };
