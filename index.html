@@ -1381,7 +1381,7 @@
                 else hasSession = false;
                 if (localEngine) localEngine.wipeSession();
                 if (worker) {
-                    try { worker.postMessage({ type: 'wipe' }); } catch (err) {}
+                    try { worker.postMessage({ type: 'wipe' }); } catch (err) { stopWorker(); }
                 }
             }
 
