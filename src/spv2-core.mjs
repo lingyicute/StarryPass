@@ -401,10 +401,11 @@ const EXPECTED_ARGON2_KAT = new Uint8Array([
 
 let selfTestPromise = null;
 let wasmGatePromise = null;
+let wasmGateSource = null;
 
 function runSelfTest(inWorker, pureJs) {
     if (!selfTestPromise) {
-        selfTestPromise = (async () => {
+        const pendingSelf = (async () => {
             // 1. RFC 9106 §5.3 Argon2id KAT (exercises secret + AD).
             //    The production path uses an empty secret, but the KAT
             //    must provide one, so it goes through the key variant.
@@ -432,15 +433,22 @@ function runSelfTest(inWorker, pureJs) {
                 zeroize(tagK); zeroize(tcSalt); zeroize(tcIkm); zeroize(prk);
             }
         })().catch((err) => {
-            wasmProviderEnabled = false;
-            wasmGatePromise = null;
-            selfTestPromise = null; // allow retry on transient failure
+            if (selfTestPromise === pendingSelf) {
+                selfTestPromise = null; // allow retry on transient failure
+                if (wasmGateSource === pendingSelf) {
+                    wasmProviderEnabled = false;
+                    wasmGatePromise = null;
+                    wasmGateSource = null;
+                }
+            }
             throw err;
         });
+        selfTestPromise = pendingSelf;
     }
     if (pureJs) return selfTestPromise;
     if (!wasmGatePromise) {
-        wasmGatePromise = selfTestPromise.then(async () => {
+        const sourceSelf = selfTestPromise;
+        const pendingWasm = sourceSelf.then(async () => {
             // 3. Cross-provider gate: the vendored hash-wasm (WASM) fast
             //    path is enabled only if it reproduces the same vector
             //    byte for byte. Mismatch disables the fast path.
@@ -470,10 +478,15 @@ function runSelfTest(inWorker, pureJs) {
                 console.warn('StarryPass: WASM provider unavailable; using noble-hashes.');
             }
         }).catch((err) => {
-            wasmProviderEnabled = false;
-            wasmGatePromise = null;
+            if (wasmGatePromise === pendingWasm) {
+                wasmProviderEnabled = false;
+                wasmGatePromise = null;
+                wasmGateSource = null;
+            }
             throw err;
         });
+        wasmGatePromise = pendingWasm;
+        wasmGateSource = sourceSelf;
     }
     return wasmGatePromise;
 }
