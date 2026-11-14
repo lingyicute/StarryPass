@@ -292,22 +292,29 @@ class HkdfStream {
 
     async nextByte() {
         if (this.pos >= this.buf.length) {
-            this.blockIdx++;
-            if (this.blockIdx > HKDF_MAX_BLOCKS) throw new Error('HKDF_EXHAUSTED');
+            const nextIdx = this.blockIdx + 1;
+            if (nextIdx > HKDF_MAX_BLOCKS) throw new Error('HKDF_EXHAUSTED');
             const bits = await subtle().deriveBits(
                 { name: 'HKDF', hash: 'SHA-256', salt: DOMAIN_EXTRACT, info: this.info },
                 this.ikmKey,
-                this.blockIdx * 32 * 8
+                nextIdx * 32 * 8
             );
+            if (!(bits instanceof ArrayBuffer)) {
+                if (ArrayBuffer.isView(bits)) {
+                    zeroize(new Uint8Array(bits.buffer, bits.byteOffset, bits.byteLength));
+                }
+                throw new Error('INVALID_HKDF_OUTPUT');
+            }
             // deriveBits also returns all preceding blocks: erase that full
             // native result and the replaced block, not just the last slice.
             const raw = new Uint8Array(bits);
             try {
                 // Exact length only: slicing a short or long result would yield a misaligned block.
-                if (raw.length !== this.blockIdx * 32) throw new Error('INVALID_HKDF_OUTPUT');
+                if (raw.length !== nextIdx * 32) throw new Error('INVALID_HKDF_OUTPUT');
                 const next = raw.slice(-32);
                 zeroize(this.buf);
                 this.buf = next;
+                this.blockIdx = nextIdx;
                 this.pos = 0;
             } finally {
                 zeroize(raw);
