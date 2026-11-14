@@ -494,6 +494,22 @@ for (const delta of [-8, 8]) {
     stream.dispose();
 }
 
+// Non-ArrayBuffer HKDF outputs (e.g. numeric 32) must not be coerced into zero bytes,
+// views must be zeroized, and blockIdx must not advance on failure.
+{
+    const view = new Uint8Array(32).fill(0x5a);
+    for (const bad of [32, null, view]) {
+        const f = fixture();
+        f.crypto.subtle.deriveBits = async () => bad;
+        const stream = new f.HkdfStream(new Uint8Array([1, 2, 3]));
+        await stream.init(new Uint8Array(32).fill(7));
+        await reject(stream.nextByte(), /INVALID_HKDF_OUTPUT/);
+        check(stream.blockIdx === 0, 'failed HKDF read does not advance blockIdx');
+        stream.dispose();
+    }
+    check(zero(view), 'non-ArrayBuffer HKDF typed-array view is cleared');
+}
+
 // A stale wasmGatePromise rejection must not clear a retry gate started after selfTestPromise reset.
 {
     const kat = argon2id(new Uint8Array(32).fill(1), new Uint8Array(16).fill(2),
