@@ -45,9 +45,9 @@
 2. **黄金测试集** — `tests/golden.json`（原有 44 条保持不变，覆盖 Unicode、counter/length 边界截断、未知 mode/tier 回退、模式边界、paranoid 档与空输入错误）→ **全部逐位一致**；
 3. **构建产物级测试** — `tests/verify_bundle.mjs` 直接加载发行文件
    `assets/js/spv2-core.js` 重跑向量 + 会话缓存 → **通过**；
-4. **运行时自检（沿用原版开机已知答案自检 KAT）** —
-   RFC 9106 §5.3 Argon2id KAT（同时覆盖 secret 与 associated data）+ RFC 5869 TC1 HMAC KAT；不通过则拒绝派生；
-5. **移植回归** — 13 条额外固定兼容向量、真正的 NFD/NFC 与 trim 检查；源码/发行包分别在 WASM 与 noble 路径下共 **194 项**比较；核心边界/清理 **368 项**、SW **79 项**，另有 Chromium 浏览器回归（断言数以 `npm run test:browser` 输出为准）。
+4. **运行时自检（启动已知答案测试 KAT）** —
+   RFC 9106 §5.3 Argon2id（含 secret 与 associated data）、SHA-256 与 RFC 5869 A.1 的完整 HMAC 和原生 HKDF 输出；任一不通过则拒绝派生；
+5. **移植回归** — 13 条额外固定兼容向量、真正的 NFD/NFC 与 trim 检查；源码/发行包分别在 WASM 与 noble 路径下共 **194 项**比较；核心边界/清理与自检、SW 并发缓存，另有 Chromium 浏览器回归（断言数以各测试输出为准）。
 
 ```bash
 npm ci

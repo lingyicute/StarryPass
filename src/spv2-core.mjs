@@ -405,7 +405,7 @@ async function synthesizePassword(sk, codeBytes, counter, length, modeName) {
 }
 
 /* ------------------------------------------------------------------ *
- * FIPS 140-3 style power-on self-test (same two KATs as the original) *
+ * Power-on known-answer tests for the actual providers in use         *
  * ------------------------------------------------------------------ */
 
 const EXPECTED_ARGON2_KAT = new Uint8Array([
@@ -427,24 +427,49 @@ function runSelfTest(inWorker, pureJs) {
             const s = new Uint8Array(16).fill(2);
             const k = new Uint8Array(8).fill(3);
             const x = new Uint8Array(12).fill(4);
-            let tagK, tcSalt, tcIkm, prk;
+            let tagK, shaInput, shaOutput, tcSalt, tcIkm, tcInfo, prk, okm, hkdfKey;
             try {
                 tagK = await argon2idDeriveWithKey(p, s, k, x, inWorker);
                 if (!constantTimeEqual(tagK, EXPECTED_ARGON2_KAT)) {
                     throw new Error('KAT_ARGON2ID_FAILED');
                 }
 
-                // 2. RFC 5869 TC1 HMAC/SHA-256 KAT (first 8 bytes of PRK).
+                // Test digest separately: Web Crypto's digest, HMAC and HKDF
+                // entry points need not share the same implementation.
+                shaInput = new Uint8Array([0x61, 0x62, 0x63]); // SHA-256("abc")
+                shaOutput = await sha256(shaInput);
+                const expectedSha = new Uint8Array([
+                    0xba,0x78,0x16,0xbf,0x8f,0x01,0xcf,0xea,0x41,0x41,0x40,0xde,0x5d,0xae,0x22,0x23,
+                    0xb0,0x03,0x61,0xa3,0x96,0x17,0x7a,0x9c,0xb4,0x10,0xff,0x61,0xf2,0x00,0x15,0xad,
+                ]);
+                if (!constantTimeEqual(shaOutput, expectedSha)) throw new Error('KAT_SHA256_FAILED');
+
+                // RFC 5869 A.1: check the full HMAC PRK and native HKDF OKM,
+                // including the second expansion block actually used by the app.
                 tcSalt = new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
                 tcIkm = new Uint8Array(22).fill(0x0b);
+                tcInfo = new Uint8Array([0xf0,0xf1,0xf2,0xf3,0xf4,0xf5,0xf6,0xf7,0xf8,0xf9]);
                 prk = await hmacSha256(tcSalt, tcIkm);
-                const expectedPrk8 = [0x07, 0x77, 0x09, 0x36, 0x2c, 0x2e, 0x32, 0xdf];
-                for (let j = 0; j < 8; j++) {
-                    if (prk[j] !== expectedPrk8[j]) throw new Error('KAT_SHA256_FAILED');
-                }
+                const expectedPrk = new Uint8Array([
+                    0x07,0x77,0x09,0x36,0x2c,0x2e,0x32,0xdf,0x0d,0xdc,0x3f,0x0d,0xc4,0x7b,0xba,0x63,
+                    0x90,0xb6,0xc7,0x3b,0xb5,0x0f,0x9c,0x31,0x22,0xec,0x84,0x4a,0xd7,0xc2,0xb3,0xe5,
+                ]);
+                if (!constantTimeEqual(prk, expectedPrk)) throw new Error('KAT_SHA256_FAILED');
+                hkdfKey = await subtle().importKey('raw', tcIkm, 'HKDF', false, ['deriveBits']);
+                okm = validateCryptoBytes(await subtle().deriveBits(
+                    { name: 'HKDF', hash: 'SHA-256', salt: tcSalt, info: tcInfo }, hkdfKey, 42 * 8
+                ), 42, 'INVALID_HKDF_OUTPUT');
+                const expectedOkm = new Uint8Array([
+                    0x3c,0xb2,0x5f,0x25,0xfa,0xac,0xd5,0x7a,0x90,0x43,0x4f,0x64,0xd0,0x36,0x2f,0x2a,
+                    0x2d,0x2d,0x0a,0x90,0xcf,0x1a,0x5a,0x4c,0x5d,0xb0,0x2d,0x56,0xec,0xc4,0xc5,0xbf,
+                    0x34,0x00,0x72,0x08,0xd5,0xb8,0x87,0x18,0x58,0x65,
+                ]);
+                if (!constantTimeEqual(okm, expectedOkm)) throw new Error('KAT_HKDF_FAILED');
             } finally {
                 zeroize(p); zeroize(s); zeroize(k); zeroize(x);
-                zeroize(tagK); zeroize(tcSalt); zeroize(tcIkm); zeroize(prk);
+                zeroize(tagK); zeroize(shaInput); zeroize(shaOutput);
+                zeroize(tcSalt); zeroize(tcIkm); zeroize(tcInfo); zeroize(prk); zeroize(okm);
+                hkdfKey = null;
             }
         })().catch((err) => {
             if (selfTestPromise === pendingSelf) {

@@ -2,6 +2,7 @@
  * the exact file the browser and worker execute, and re-checks the
  * original vectors through it. Guards against build/bundling drift.
  */
+import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,6 +26,34 @@ if (typeof WorkerGlobalScope !== 'undefined') {
     process.exit(1);
 }
 console.log('PASS bundle exposes spv2CoreFactory');
+
+// The shipped IIFE must also fail closed on silent primitive corruption. Give
+// each case a fresh module state so a successful KAT cannot mask later faults.
+for (const [op, error] of [['digest', /KAT_SHA256_FAILED/],
+    ['sign', /KAT_SHA256_FAILED/], ['deriveBits', /KAT_HKDF_FAILED/]]) {
+    const real = globalThis.crypto;
+    const corrupt = [];
+    const subtle = {};
+    for (const name of ['digest', 'importKey', 'sign', 'deriveBits']) {
+        subtle[name] = async (...args) => {
+            const out = await real.subtle[name](...args);
+            if (name === op) {
+                const bytes = new Uint8Array(out);
+                bytes[bytes.length - 1] ^= 1;
+                corrupt.push(bytes);
+            }
+            return out;
+        };
+    }
+    const injectedCrypto = { subtle, getRandomValues: bytes => real.getRandomValues(bytes) };
+    const isolatedFactory = new Function('self', 'globalThis',
+        `${code}; return self.spv2CoreFactory;`)({}, { crypto: injectedCrypto });
+    const isolated = isolatedFactory(null, false);
+    await assert.rejects(isolated.derive({ master: 'test only', code: 'kat' }), error);
+    assert.ok(corrupt.length === 1 && corrupt[0].every(byte => byte === 0), op + ' KAT clears output');
+    await isolated.wipeSession();
+}
+console.log('PASS bundle fails closed on SHA-256, HMAC and HKDF corruption');
 
 const vectors = JSON.parse(fs.readFileSync(path.join(here, 'vectors.json'), 'utf8'));
 const engine = factory(null, false);

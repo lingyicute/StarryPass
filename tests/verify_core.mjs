@@ -30,6 +30,34 @@ function fixture(extra = {}) {
     return { ...probe, ...loaded, warnings, tags, calls:()=>calls };
 }
 
+// A primitive can return the right byte count but still be wrong. Check each
+// actual Web Crypto operation, including bytes beyond the old 8-byte PRK check.
+for (const [op, expected] of [
+    ['digest', /KAT_SHA256_FAILED/],
+    ['sign', /KAT_SHA256_FAILED/],
+    ['deriveBits', /KAT_HKDF_FAILED/],
+]) {
+    const f = fixture();
+    const native = f.crypto.subtle[op];
+    const corrupted = [];
+    f.crypto.subtle[op] = async (...values) => {
+        const result = await native(...values);
+        const bytes = new Uint8Array(result);
+        bytes[bytes.length - 1] ^= 1;
+        corrupted.push(bytes);
+        return result;
+    };
+    const e = f.spv2CoreFactory(null, false);
+    await reject(e.derive(args), expected);
+    check(f.calls() === 0 && f.state.random.length === 0, op + ' KAT rejects before user KDF/cache');
+    check(corrupted.length === 1 && corrupted.every(zero), op + ' KAT clears faulty output');
+    check(f.state.hkdfKeys.every(zero) && f.state.messages.every(zero) && f.state.digestInputs.every(zero),
+        op + ' KAT clears all test buffers on failure');
+    f.crypto.subtle[op] = native;
+    check((await e.derive(args)).cached === false, op + ' KAT retries after a transient failure');
+    await e.wipeSession();
+}
+
 // Strong-random generation must succeed before publishing a nonce. Failure must
 // remain fail-closed on every request, not just the first one.
 {
