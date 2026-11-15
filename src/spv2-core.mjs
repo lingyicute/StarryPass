@@ -293,10 +293,11 @@ async function computeSessionTag(masterBytes, codeBytes, tierId, nonce) {
  * ------------------------------------------------------------------ */
 
 class HkdfStream {
-    constructor(info) {
+    constructor(info, initialBlocks = 1) {
         this.info = info;
         this.ikmKey = null;
         this.blockIdx = 0;
+        this.initialBlocks = Math.max(1, Math.min(HKDF_MAX_BLOCKS, initialBlocks | 0));
         this.buf = new Uint8Array(0);
         this.pos = 0;
     }
@@ -307,7 +308,7 @@ class HkdfStream {
 
     async nextByte() {
         if (this.pos >= this.buf.length) {
-            const nextIdx = this.blockIdx + 1;
+            const nextIdx = this.blockIdx === 0 ? this.initialBlocks : this.blockIdx + 1;
             if (nextIdx > HKDF_MAX_BLOCKS) throw new Error('HKDF_EXHAUSTED');
             const bits = await subtle().deriveBits(
                 { name: 'HKDF', hash: 'SHA-256', salt: DOMAIN_EXTRACT, info: this.info },
@@ -318,7 +319,7 @@ class HkdfStream {
             // native result and the replaced block, not just the last slice.
             const raw = validateCryptoBytes(bits, nextIdx * 32, 'INVALID_HKDF_OUTPUT');
             try {
-                const next = raw.slice(-32);
+                const next = raw.slice(this.blockIdx * 32);
                 zeroize(this.buf);
                 this.buf = next;
                 this.blockIdx = nextIdx;
@@ -363,7 +364,7 @@ async function synthesizePassword(sk, codeBytes, counter, length, modeName) {
         info = concatBytes([DOMAIN_EXPAND, meta, codeFrame]);
         zeroize(codeFrame);
         zeroize(meta);
-        stream = new HkdfStream(info);
+        stream = new HkdfStream(info, Math.ceil(length / 32));
         await stream.init(sk);
         const pool = modeSpec.pool;
         const reqClasses = length >= modeSpec.req.length ? modeSpec.req : [];

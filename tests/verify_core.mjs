@@ -606,4 +606,31 @@ for (const op of ['digest', 'sign']) {
     await e.wipeSession();
 }
 
+// Prefetching the minimum required HKDF blocks preserves exact stream bytes,
+// clears full native outputs and avoids redundant 32-byte round-trips for length > 32.
+{
+    const f = fixture();
+    const info1 = new Uint8Array([9, 8, 7]), info2 = new Uint8Array([9, 8, 7]);
+    const sk = new Uint8Array(32).fill(42);
+    const s1 = new f.HkdfStream(info1), s2 = new f.HkdfStream(info2, 2);
+    await s1.init(sk); await s2.init(sk);
+    const out1 = [], out2 = [];
+    for (let i = 0; i < 96; i++) { out1.push(await s1.nextByte()); out2.push(await s2.nextByte()); }
+    check(out1.join(',') === out2.join(','), 'prefetched HkdfStream emits identical bytes across block boundaries');
+    check(f.state.rawBlocks.every(zero), 'prefetched native deriveBits outputs are zeroized immediately');
+    s1.dispose(); s2.dispose();
+
+    const deriveLens = [];
+    const nativeDerive = f.crypto.subtle.deriveBits;
+    f.crypto.subtle.deriveBits = async (alg, key, bits) => {
+        deriveLens.push(bits);
+        return nativeDerive(alg, key, bits);
+    };
+    const e = f.spv2CoreFactory(null, false);
+    await e.derive({ ...args, length: 64 });
+    // First deriveBits is KAT (42*8=336); synthesis for 64 chars starts at 64*8=512, never 256.
+    check(deriveLens[1] === 512, 'length=64 synthesis starts HKDF at 2 blocks (512 bits)');
+    await e.wipeSession();
+}
+
 console.log(`PASS production core: ${checks} cache, CSPRNG, cleanup, provider and async-wipe checks`);
