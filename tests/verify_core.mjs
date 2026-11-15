@@ -586,4 +586,24 @@ for (const op of ['digest', 'sign']) {
     check(zero(new Uint8Array(shortBuf)) && zero(wrongView), op + ' clears malformed outputs');
 }
 
+// Main-thread (non-Worker) engines forward onProgress to argon2idAsync when provided.
+{
+    const seen = [];
+    const f = fixture({
+        argon2idAsync: async (password, salt, opts) => {
+            if (opts.m === 32) return argon2id(password, salt, opts);
+            seen.push(typeof opts.onProgress);
+            if (opts.onProgress) { opts.onProgress(0.5); opts.onProgress(1); }
+            return new Uint8Array(32).fill(13);
+        },
+    });
+    const e = f.spv2CoreFactory(null, false);
+    const ticks = [];
+    await e.derive(args, (p) => ticks.push(p));
+    await e.derive({ ...args, master: args.master + ' no-progress' });
+    check(seen.join(',') === 'function,undefined', 'non-Worker argon2idAsync forwards onProgress only when supplied');
+    check(ticks.join(',') === '0.5,1', 'non-Worker onProgress receives progress updates');
+    await e.wipeSession();
+}
+
 console.log(`PASS production core: ${checks} cache, CSPRNG, cleanup, provider and async-wipe checks`);

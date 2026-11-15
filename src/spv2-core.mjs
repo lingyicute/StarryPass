@@ -238,7 +238,7 @@ function startArgon2id({ password, salt, ad, memoryKiB, passes, parallelism, tag
     };
     return inWorker
         ? argon2id(password, salt, onProgress ? { ...opts, onProgress } : opts)
-        : argon2idAsync(password, salt, { ...opts, asyncTick: 30 });
+        : argon2idAsync(password, salt, onProgress ? { ...opts, asyncTick: 30, onProgress } : { ...opts, asyncTick: 30 });
 }
 
 /* ------------------------------------------------------------------ *
