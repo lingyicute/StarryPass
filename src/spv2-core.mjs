@@ -295,21 +295,19 @@ async function buildSalt(codeBytes, tierId) {
  * ------------------------------------------------------------------ */
 
 async function computeSessionTag(masterBytes, codeBytes, tierId, nonce) {
-    let tierByte, masterFrame, codeFrame, msg;
+    const masterLenOffset = DOMAIN_CACHE.length;
+    const codeLenOffset = masterLenOffset + 4 + masterBytes.length;
+    const msg = new Uint8Array(codeLenOffset + 4 + codeBytes.length + 1);
     try {
-        tierByte = new Uint8Array([tierId]);
-        masterFrame = lenPrefixed(masterBytes);
-        codeFrame = lenPrefixed(codeBytes);
-        msg = concatBytes([DOMAIN_CACHE, masterFrame, codeFrame, tierByte]);
-        zeroize(masterFrame);
-        zeroize(codeFrame);
-        zeroize(tierByte);
+        msg.set(DOMAIN_CACHE);
+        writeLE32(msg, masterLenOffset, masterBytes.length);
+        msg.set(masterBytes, masterLenOffset + 4);
+        writeLE32(msg, codeLenOffset, codeBytes.length);
+        msg.set(codeBytes, codeLenOffset + 4);
+        msg[msg.length - 1] = tierId;
         return await hmacSha256(nonce, msg);
     } finally {
-        zeroize(masterFrame);
-        zeroize(codeFrame);
         zeroize(msg);
-        zeroize(tierByte);
     }
 }
 

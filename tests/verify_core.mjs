@@ -3,6 +3,7 @@
  * production parameters/answers are checked separately by verify_compat.mjs.
  */
 import assert from 'node:assert/strict';
+import { createHmac } from 'node:crypto';
 import { argon2id } from '@noble/hashes/argon2.js';
 import { loadCore, cryptoProbe } from './helpers/load-core.mjs';
 
@@ -28,6 +29,21 @@ function fixture(extra = {}) {
         argon2id:fakeKdf, argon2idAsync:async (...values) => fakeKdf(...values),
         console:{warn:message=>warnings.push(message)}, ...extra });
     return { ...probe, ...loaded, warnings, tags, calls:()=>calls };
+}
+
+// Independently verify the frame, including UTF-8 byte lengths above 255.
+{
+    const f = fixture(), nonce = new Uint8Array(32).fill(17);
+    const master = Buffer.from('星愿'.repeat(55)), code = Buffer.from('é'.repeat(145));
+    const reference = createHmac('sha256', nonce).update('StarryPass-v2:session-cache-tag:v1\x00');
+    for (const value of [master, code]) {
+        const length = Buffer.alloc(4);
+        length.writeUInt32LE(value.byteLength);
+        reference.update(length).update(value);
+    }
+    const tag = await f.computeSessionTag(master, code, 2, nonce);
+    check(Buffer.from(tag).equals(reference.update(Uint8Array.of(2)).digest()), 'cache tag retains the LE32 wire frame');
+    check(f.state.messages.length === 1 && f.state.messages.every(zero), 'the single cache-tag frame is cleared');
 }
 
 // A primitive can return the right byte count but still be wrong. Check each
