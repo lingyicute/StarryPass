@@ -689,4 +689,28 @@ for (const op of ['digest', 'sign']) {
     await e.wipeSession();
 }
 
+// Under repeated refill, Web Crypto calls grow logarithmically. Prove every
+// emitted byte against one native expansion, including the partial last batch.
+{
+    const f = fixture();
+    const bytes = 255 * 32, sk = new Uint8Array(32).fill(9), info = Uint8Array.of(1, 3, 7);
+    const stream = new f.HkdfStream(info);
+    await stream.init(sk);
+    const salt = new TextEncoder().encode('StarryPass-v2:hkdf-extract:v1');
+    const expected = new Uint8Array(await f.crypto.subtle.deriveBits(
+        { name: 'HKDF', hash: 'SHA-256', salt, info }, stream.ikmKey, 8 * bytes));
+    f.state.rawBlocks.length = 0;
+    const actual = new Uint8Array(bytes);
+    for (let i = 0; i < bytes; i++) actual[i] = await stream.nextByte();
+    assert.deepEqual(actual, expected, 'every byte across refill boundaries matches native HKDF');
+    check(f.state.rawBlocks.length === 9, '255 blocks need 9 native calls instead of 255');
+    check(f.state.rawBlocks.at(-1).length === bytes, 'last refill respects the 255-block ceiling');
+    await reject(stream.nextByte(), /HKDF_EXHAUSTED/);
+    check(f.state.rawBlocks.every(zero), 'each full native result is cleared');
+    const tail = stream.buf;
+    stream.dispose();
+    check(zero(tail) && zero(info), 'final batched suffix is cleared on dispose');
+    expected.fill(0); actual.fill(0); sk.fill(0);
+}
+
 console.log(`PASS production core: ${checks} cache, CSPRNG, cleanup, provider and async-wipe checks`);

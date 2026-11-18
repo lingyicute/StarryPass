@@ -305,9 +305,9 @@ async function computeSessionTag(masterBytes, codeBytes, tierId, nonce) {
 /* ------------------------------------------------------------------ *
  * Stage 3 — HKDF-SHA-256 stream (RFC 5869 on top of Web Crypto)       *
  *                                                                     *
- * T(i) is produced by deriving the first i*32 bytes of the standard   *
- * HKDF-Expand with `info` and taking the last block — byte-identical  *
- * to the original lazy block loop, built purely from subtle.deriveBits.*
+ * Web Crypto returns an HKDF prefix on each call. Grow the prefix in  *
+ * batches and consume only the new suffix, keeping the original       *
+ * byte order without recomputing a prefix for every single block.      *
  * ------------------------------------------------------------------ */
 
 class HkdfStream {
@@ -326,8 +326,8 @@ class HkdfStream {
 
     async nextByte() {
         if (this.pos >= this.buf.length) {
-            const nextIdx = this.blockIdx === 0 ? this.initialBlocks : this.blockIdx + 1;
-            if (nextIdx > HKDF_MAX_BLOCKS) throw new Error('HKDF_EXHAUSTED');
+            if (this.blockIdx === HKDF_MAX_BLOCKS) throw new Error('HKDF_EXHAUSTED');
+            const nextIdx = this.blockIdx === 0 ? this.initialBlocks : Math.min(HKDF_MAX_BLOCKS, this.blockIdx * 2);
             const bits = await subtle().deriveBits(
                 { name: 'HKDF', hash: 'SHA-256', salt: DOMAIN_EXTRACT, info: this.info },
                 this.ikmKey,
