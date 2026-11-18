@@ -192,6 +192,61 @@ for(const provider of [null,{argon2id:async()=>{throw new Error(args.master);}},
     await e.wipeSession();
 }
 
+// A passed boot gate cannot guarantee that the WASM runtime will never trap.
+// Check the actual provider selection and unchanged costs on each execution lane.
+{
+    const kat = Uint8Array.from(Buffer.from('0d640df58d78766c08c037a34a8b53c9d01ef0452d75b65eb52520e96b01e659', 'hex'));
+    for (const [worker, ErrorType] of [[null, WebAssembly.CompileError], [null, WebAssembly.LinkError],
+        [{ postMessage() {} }, WebAssembly.RuntimeError]]) {
+        const wasmCosts = [], nobleCosts = [], progress = [];
+        function noble(password, salt, opts) {
+            if (opts.m === 32) return argon2id(password, salt, opts);
+            nobleCosts.push([opts.m, opts.t, opts.p]);
+            opts.onProgress?.(1);
+            return new Uint8Array(32).fill(11);
+        }
+        const f = fixture({ provider: { async argon2id(opts) {
+            if (opts.memorySize === 32) return kat.slice();
+            wasmCosts.push([opts.memorySize, opts.iterations, opts.parallelism]);
+            throw new ErrorType(args.master);
+        } }, argon2id: noble, argon2idAsync: async (...values) => noble(...values) });
+        const request = { ...args, tier: 'paranoid' };
+        const control = fixture().spv2CoreFactory(null, true);
+        const expected = await control.derive(request);
+        await control.wipeSession();
+        const e = f.spv2CoreFactory(worker, false);
+        const first = await e.derive(request, value => progress.push(value));
+        check(first.password === expected.password && !first.cached, 'runtime fallback preserves the selected password');
+        assert.deepEqual(wasmCosts, [[262144, 4, 4]]);
+        assert.deepEqual(nobleCosts, wasmCosts, 'fallback preserves the selected Argon2 cost');
+        assert.deepEqual(progress, [1], 'fallback forwards progress');
+        check(e.provider() === 'noble-hashes', 'execution fault disables WASM after the KAT');
+        check(f.warnings.length === 1 && !f.warnings[0].includes(args.master), 'runtime diagnostic is once-only and nonsensitive');
+        check((await e.derive(request)).cached, 'session cache is usable after fallback');
+        await e.derive({ ...request, code: 'fresh after fallback' });
+        check(wasmCosts.length === 1 && nobleCosts.length === 2, 'next cache miss uses noble directly');
+        await e.wipeSession();
+    }
+
+    const entered = pause(), release = pause();
+    const f = fixture({ provider: { async argon2id(opts) {
+        if (opts.memorySize === 32) return kat.slice();
+        entered.resolve();
+        await release.promise;
+        throw new WebAssembly.RuntimeError('injected native fault');
+    } } });
+    const e = f.spv2CoreFactory(null, false);
+    const obsolete = e.derive(args);
+    await entered.promise;
+    const wiped = e.wipeSession();
+    release.resolve();
+    await reject(obsolete, /SESSION_WIPED/);
+    await wiped;
+    check(f.calls() === 0, 'wiped work does not start a second KDF');
+    check((await e.derive(args)).password.length === args.length && f.calls() === 1, 'next request can recover with noble');
+    await e.wipeSession();
+}
+
 // Failed boot HMAC must reset an already successful WASM cross-gate.
 {
     const kat=Uint8Array.from(Buffer.from('0d640df58d78766c08c037a34a8b53c9d01ef0452d75b65eb52520e96b01e659','hex'));
@@ -363,6 +418,7 @@ for(const lane of ['wasm','noble-local','noble-worker']) {
             await e.derive(args);failing=true;
             await reject(e.derive({...args,master:'memory fault '+lane+label}),expected);
             check(f.state.encoded.every(zero),lane+' '+label+' KDF failure clears inputs');
+            if (lane === 'wasm') check(e.provider() === 'hash-wasm', 'non-WASM failures do not disable the fast path');
             failing=false;
             check((await e.derive(args)).cached===false,lane+' '+label+' recovers with a clean cache');
             await e.wipeSession();
