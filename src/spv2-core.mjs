@@ -324,37 +324,37 @@ class HkdfStream {
         this.ikmKey = await subtle().importKey('raw', sk, 'HKDF', false, ['deriveBits']);
     }
 
-    async nextByte() {
-        if (this.pos >= this.buf.length) {
-            if (this.blockIdx === HKDF_MAX_BLOCKS) throw new Error('HKDF_EXHAUSTED');
-            const nextIdx = this.blockIdx === 0 ? this.initialBlocks : Math.min(HKDF_MAX_BLOCKS, this.blockIdx * 2);
-            const bits = await subtle().deriveBits(
-                { name: 'HKDF', hash: 'SHA-256', salt: DOMAIN_EXTRACT, info: this.info },
-                this.ikmKey,
-                nextIdx * 32 * 8
-            );
-            // deriveBits also returns all preceding blocks: erase that full
-            // native result and the replaced block, not just the last slice.
-            const raw = validateCryptoBytes(bits, nextIdx * 32, 'INVALID_HKDF_OUTPUT');
-            try {
-                const next = raw.slice(this.blockIdx * 32);
-                zeroize(this.buf);
-                this.buf = next;
-                this.blockIdx = nextIdx;
-                this.pos = 0;
-            } finally {
-                zeroize(raw);
-            }
+    async refill() {
+        if (this.blockIdx === HKDF_MAX_BLOCKS) throw new Error('HKDF_EXHAUSTED');
+        const nextIdx = this.blockIdx === 0 ? this.initialBlocks : Math.min(HKDF_MAX_BLOCKS, this.blockIdx * 2);
+        const bits = await subtle().deriveBits(
+            { name: 'HKDF', hash: 'SHA-256', salt: DOMAIN_EXTRACT, info: this.info },
+            this.ikmKey,
+            nextIdx * 32 * 8
+        );
+        // deriveBits also returns all preceding blocks: erase that full
+        // native result and the replaced buffer, not just the last slice.
+        const raw = validateCryptoBytes(bits, nextIdx * 32, 'INVALID_HKDF_OUTPUT');
+        try {
+            const next = raw.slice(this.blockIdx * 32);
+            zeroize(this.buf);
+            this.buf = next;
+            this.blockIdx = nextIdx;
+            this.pos = 0;
+        } finally {
+            zeroize(raw);
         }
-        return this.buf[this.pos++];
     }
 
-    async uniformInt(n) {
+    uniformInt(n) {
         const limit = 256 - (256 % n);
-        for (;;) {
-            const b = this.pos < this.buf.length ? this.buf[this.pos++] : await this.nextByte();
+        while (this.pos < this.buf.length) {
+            const b = this.buf[this.pos++];
             if (b < limit) return b % n;
         }
+        // Preserve the stream position across rejection at a refill boundary.
+        // A buffered sample needs neither a Promise nor a microtask.
+        return this.refill().then(() => this.uniformInt(n));
     }
 
     dispose() {
@@ -390,7 +390,10 @@ async function synthesizePassword(sk, codeBytes, counter, length, modeName) {
 
         for (let attempt = 0; attempt < 128; attempt++) {
             const chars = new Array(length);
-            for (let i = 0; i < length; i++) chars[i] = pool.charAt(await stream.uniformInt(pool.length));
+            for (let i = 0; i < length; i++) {
+                const pick = stream.uniformInt(pool.length);
+                chars[i] = pool.charAt(typeof pick === 'number' ? pick : await pick);
+            }
             const candidate = chars.join('');
             let ok = true;
             for (const cls of reqClasses) {
@@ -405,10 +408,17 @@ async function synthesizePassword(sk, codeBytes, counter, length, modeName) {
 
         if (!result) {
             const arr = [];
-            for (const cls of reqClasses) arr.push(cls.charAt(await stream.uniformInt(cls.length)));
-            while (arr.length < length) arr.push(pool.charAt(await stream.uniformInt(pool.length)));
+            for (const cls of reqClasses) {
+                const pick = stream.uniformInt(cls.length);
+                arr.push(cls.charAt(typeof pick === 'number' ? pick : await pick));
+            }
+            while (arr.length < length) {
+                const pick = stream.uniformInt(pool.length);
+                arr.push(pool.charAt(typeof pick === 'number' ? pick : await pick));
+            }
             for (let s = length - 1; s > 0; s--) {
-                const j = await stream.uniformInt(s + 1);
+                const pick = stream.uniformInt(s + 1);
+                const j = typeof pick === 'number' ? pick : await pick;
                 const tmp = arr[s]; arr[s] = arr[j]; arr[j] = tmp;
             }
             result = arr.join('');
