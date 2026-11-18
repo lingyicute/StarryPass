@@ -662,6 +662,29 @@ for (const op of ['digest', 'sign']) {
     await e.wipeSession();
 }
 
+// Throwing observers must not interrupt the provider's cleanup, publish a
+// cache entry, or be mistaken for its memory errors in either noble mode.
+for (const worker of [null, { postMessage() {} }]) {
+    let finished = 0, notifications = 0, key;
+    function noble(password, salt, opts) {
+        if (opts.m === 32) return argon2id(password, salt, opts);
+        opts.onProgress?.(0.5);
+        opts.onProgress?.(1);
+        finished++;
+        return (key = new Uint8Array(32).fill(27));
+    }
+    const f = fixture({ argon2id: noble, argon2idAsync: async (...values) => noble(...values) });
+    const e = f.spv2CoreFactory(worker, true);
+    const fault = new RangeError('observer fault, not provider OOM');
+    await reject(e.derive(args, () => { notifications++; throw fault; }), (error) => error === fault);
+    check(finished === 1 && notifications === 1, 'provider finishes after the first observer exception');
+    check(zero(key), 'wrapper erases a tag that cannot be returned');
+    check(f.state.random.every(zero) && f.state.encoded.every(zero), 'failed observer leaves no active session buffers');
+    check((await e.derive(args)).cached === false, 'the failed observer cannot leave a cached tag');
+    check((await e.derive(args)).cached === true, 'subsequent success repopulates the cache');
+    await e.wipeSession();
+}
+
 // Prefetching the minimum required HKDF blocks preserves exact stream bytes,
 // clears full native outputs and avoids redundant 32-byte round-trips for length > 32.
 {

@@ -192,9 +192,15 @@ function validateSessionKey(output) {
  */
 async function argon2idDerive(params, inWorker, pureJs, onProgress, assertCurrent) {
     const useWasm = !pureJs && wasmProviderEnabled && !!hashwasmArgon2id;
-    let output;
+    let output, progressFailure;
+    const reportProgress = onProgress && ((value) => {
+        if (progressFailure) return;
+        // Noble's in-loop callback can unwind before it clears its matrix.
+        // Capture the caller's exception and let the provider finish cleanup.
+        try { onProgress(value); } catch (error) { progressFailure = { error }; }
+    });
     try {
-        output = await startArgon2id(params, inWorker, useWasm, onProgress);
+        output = await startArgon2id(params, inWorker, useWasm, reportProgress);
     } catch (err) {
         if (!useWasm || !isWasmExecutionError(err)) throw classifyKdfError(err);
         if (wasmProviderEnabled) {
@@ -205,13 +211,18 @@ async function argon2idDerive(params, inWorker, pureJs, onProgress, assertCurren
         // and do not start another KDF for work invalidated by a session wipe.
         assertCurrent();
         try {
-            output = await startArgon2id(params, inWorker, false, onProgress);
+            output = await startArgon2id(params, inWorker, false, reportProgress);
         } catch (fallbackError) {
             throw classifyKdfError(fallbackError);
         }
     }
     // Malformed output must fail closed, not trigger a retry on another provider.
-    return validateSessionKey(output);
+    const key = validateSessionKey(output);
+    if (progressFailure) {
+        zeroize(key);
+        throw progressFailure.error;
+    }
+    return key;
 }
 
 function isWasmExecutionError(err) {
