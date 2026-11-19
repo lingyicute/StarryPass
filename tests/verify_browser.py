@@ -547,6 +547,13 @@ async def test_copy_and_theme(browser, url):
         await poll(lambda: page.evaluate("document.getElementById('copy-label').textContent === '已复制'"))
         check(await page.evaluate('document.activeElement.id') == 'code-input', 'fallback copy restores keyboard focus')
         check(await page.locator('textarea').count() == 0, 'fallback copy removes temporary plaintext textarea')
+        snackbar_icon = "document.querySelector('#snackbar path').getAttribute('d')"
+        check((await page.evaluate(snackbar_icon)).startswith('M382-240'), 'successful copy shows the check mark')
+        await page.evaluate('document.execCommand = () => false')
+        await page.click('#copy-btn')
+        await poll(lambda: page.evaluate("document.getElementById('snackbar-text').textContent.startsWith('复制失败')"))
+        check(not (await page.evaluate(snackbar_icon)).startswith('M382-240'),
+              'failed copy does not show the success check mark')
         await page.emulate_media(color_scheme='dark')
         await page.evaluate("localStorage.setItem('sp-theme', 'light')")
         await page.reload()
