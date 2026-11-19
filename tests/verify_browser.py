@@ -577,6 +577,23 @@ async def test_counter_accessible_name(browser, url):
     print('PASS browser: counter input accessible name')
 
 
+async def test_forced_colors(browser, url):
+    context, page = await mock_page(browser, url)
+    try:
+        await page.emulate_media(forced_colors='active')
+        await page.evaluate("document.getElementById('strength').setAttribute('data-level', '2')")
+        background = 's => getComputedStyle(document.querySelector(s)).backgroundColor'
+        check(await page.evaluate(background, '.chip[aria-pressed="true"]')
+              != await page.evaluate(background, '.chip[aria-pressed="false"]'),
+              'forced colors keep the selected chips distinguishable')
+        check(await page.evaluate(background, '.strength__bar:nth-child(2)')
+              != await page.evaluate(background, '.strength__bar:nth-child(3)'),
+              'forced colors keep lit strength bars distinguishable')
+    finally:
+        await context.close()
+    print('PASS browser: forced-colors selection and strength states')
+
+
 THEME_PROBE = """(() => {
     // 记录 data-theme 的赋值时机：首帧前（<body> 尚未解析）就必须已写入主题。
     window.__themeWrites = [];
@@ -1099,6 +1116,7 @@ async def main():
                     await test_noble_fallback(browser, url)
                     await test_copy_and_theme(browser, url)
                     await test_counter_accessible_name(browser, url)
+                    await test_forced_colors(browser, url)
                     await test_counter_not_restored(browser, url, state)
                     await test_theme_first_paint_and_system_follow(browser, url)
                     await test_theme_without_storage(browser, url)

@@ -731,6 +731,20 @@
             .content { padding-left: 12px; padding-right: 12px; }
             .password { font-size: 18px; }
         }
+
+        /* Forced colors (e.g. Windows High Contrast) replace author backgrounds with the
+           system canvas: restore the states and edges that depended on them. */
+        @media (forced-colors: active) {
+            .chip, .filled-button, .counter-row input, .snackbar { border: 1px solid ButtonText; }
+            .filled-button[disabled] { border-color: GrayText; }
+            .chip[aria-pressed="true"] { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
+            .strength__bar { border: 1px solid CanvasText; }
+            .strength[data-level="1"] .strength__bar:nth-child(-n+1),
+            .strength[data-level="2"] .strength__bar:nth-child(-n+2),
+            .strength[data-level="3"] .strength__bar:nth-child(-n+3),
+            .strength[data-level="4"] .strength__bar { forced-color-adjust: none; background: CanvasText; }
+            .derive-bar.is-busy::after { forced-color-adjust: none; background: Highlight; }
+        }
     </style>
     <style>
         @font-face{
