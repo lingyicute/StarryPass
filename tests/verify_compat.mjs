@@ -20,13 +20,21 @@ const asRequest = v => {
     return {master,code,tier,counter,length,mode};
 };
 const fixedCases = additional.map(v=>({args:asRequest(v),pwd:v.pwd}));
+// Fixed answers from PoC 24f876a. 328 CJK characters plus 40 framing
+// bytes land exactly on the native limit; one extra ASCII byte exceeds it.
+const longCode = '址'.repeat(328);
+const longCodeCases = [
+    [longCode, 1, 16, 'oHmWTR*9Q1&h*Jus'],
+    [longCode + 's', 1, 16, '0%WfbfO-V1Lu=snP'],
+    [longCode + 's', 2, 64, 'EM5ycrHS8h5SzK^n#WUk)KiTE4-MaeB+%EYKEeiKpom5h+UnGs2JjD7^@PN&rDA4'],
+].map(([code,counter,length,pwd]) => ({ args: { master: 'synthetic long-code fixture', code, counter, length }, pwd }));
 const originalCases = original.map(v=>({args:asRequest(v),pwd:v.pwd}));
 let checks=0;
 for (const [label,factory,expectedProvider,cases] of [
-    ['source / WASM',spv2CoreFactory,'hash-wasm',[...golden,...fixedCases]],
-    ['bundle / WASM',bundleFactory(true),'hash-wasm',[...golden,...fixedCases]],
-    ['source / noble',loadCore({provider:null,console:quiet}).spv2CoreFactory,'noble-hashes',[...originalCases,...fixedCases]],
-    ['bundle / noble',bundleFactory(false),'noble-hashes',[...originalCases,...fixedCases]],
+    ['source / WASM',spv2CoreFactory,'hash-wasm',[...golden,...fixedCases,...longCodeCases]],
+    ['bundle / WASM',bundleFactory(true),'hash-wasm',[...golden,...fixedCases,...longCodeCases]],
+    ['source / noble',loadCore({provider:null,console:quiet}).spv2CoreFactory,'noble-hashes',[...originalCases,...fixedCases,...longCodeCases]],
+    ['bundle / noble',bundleFactory(false),'noble-hashes',[...originalCases,...fixedCases,...longCodeCases]],
 ]) {
     const engine=factory(null,false);
     for(const [index,c] of cases.entries()) {

@@ -5,21 +5,24 @@
 import fs from 'node:fs';
 import { webcrypto } from 'node:crypto';
 import { argon2id, argon2idAsync } from '@noble/hashes/argon2.js';
+import { extract as hkdfExtract, expand as hkdfExpand } from '@noble/hashes/hkdf.js';
+import { sha256 as nobleSha256 } from '@noble/hashes/sha2.js';
 import vendor from '../../vendor/hash-wasm/argon2.umd.min.cjs';
 
 export function loadCore(options = {}) {
     let source = fs.readFileSync(options.source || new URL('../../src/spv2-core.mjs', import.meta.url), 'utf8');
     let count = 0;
     source = source.replace(/^import [^\n]+;\r?\n/gm, () => { count++; return ''; });
-    if (count !== 2) throw new Error('core import probe boundary changed');
+    if (count !== 4) throw new Error('core import probe boundary changed');
     source = source.replace('export function spv2CoreFactory', 'function spv2CoreFactory');
     const crypto = options.crypto || webcrypto;
     const host = { crypto };
     const self = {};
     const run = new Function('globalThis', 'self', 'TextEncoder', 'console',
-        'argon2id', 'argon2idAsync', 'hashwasmArgon2Module', source + '\nreturn { spv2CoreFactory, HkdfStream, buildSalt, computeSessionTag, canonicalizeInputs };');
+        'argon2id', 'argon2idAsync', 'hkdfExtract', 'hkdfExpand', 'nobleSha256', 'hashwasmArgon2Module', source + '\nreturn { spv2CoreFactory, HkdfStream, buildSalt, computeSessionTag, canonicalizeInputs };');
     return run(host, self, options.TextEncoder || TextEncoder, options.console || console,
         options.argon2id || argon2id, options.argon2idAsync || argon2idAsync,
+        options.hkdfExtract || hkdfExtract, options.hkdfExpand || hkdfExpand, nobleSha256,
         Object.hasOwn(options, 'provider') ? options.provider : vendor);
 }
 

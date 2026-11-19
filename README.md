@@ -29,7 +29,7 @@
 | --- | --- | --- |
 | SHA-256 | 手写实现 | **Web Crypto** `crypto.subtle.digest`（平台实现，随浏览器/Node 一起接受审计） |
 | HMAC-SHA-256 | 手写实现 | **Web Crypto** `crypto.subtle.sign` |
-| HKDF-SHA-256 (RFC 5869) | 手写实现 | **Web Crypto** `crypto.subtle.deriveBits`（原生 HKDF） |
+| HKDF-SHA-256 (RFC 5869) | 手写实现 | **Web Crypto** `crypto.subtle.deriveBits`（超过 1024 字节的 info 由 @noble/hashes 处理） |
 | Argon2id v1.3 (RFC 9106) | 手写 JS + 手工汇编 WASM 双路径 | **vendored hash-wasm 4.12.0**（WASM 主路径）+ **@noble/hashes 2.4.0**（MIT，成熟广泛审计的纯 JS 回退实现） |
 | BLAKE2b | 手写实现 | 不再需要（仅 Argon2 内部使用，由库负责） |
 | 会话随机数 | `getRandomValues`；不可用时停用会话缓存 | 强制 `crypto.getRandomValues`；不可用时**拒绝派生** |
@@ -47,13 +47,13 @@
    `assets/js/spv2-core.js` 重跑向量 + 会话缓存 → **通过**；
 4. **运行时自检（启动已知答案测试 KAT）** —
    RFC 9106 §5.3 Argon2id（含 secret 与 associated data）、SHA-256 与 RFC 5869 A.1 的完整 HMAC 和原生 HKDF 输出；任一不通过则拒绝派生；
-5. **移植回归** — 13 条额外固定兼容向量、真正的 NFD/NFC 与 trim 检查；源码/发行包分别在 WASM 与 noble 路径下共 **194 项**比较；核心边界/清理与自检、SW 并发缓存，另有 Chromium 浏览器回归（断言数以各测试输出为准）。
+5. **移植回归** — 16 条额外固定兼容向量（含长代号）、真正的 NFD/NFC 与 trim 检查；源码/发行包分别在 WASM 与 noble 路径下共 **206 项**比较；核心边界/清理与自检、SW 并发缓存，另有 Chromium 浏览器回归（断言数以各测试输出为准）。
 
 ```bash
 npm ci
 npm test             # 核心/强度/SW 回归 + 原向量 + 构建产物
 npm run test:golden   # 再加原有 44 条黄金用例
-npm run test:compat   # 194 项源码/发行包、WASM/noble 固定答案与归一化检查
+npm run test:compat   # 206 项源码/发行包、WASM/noble 固定答案与归一化检查
 npm run test:parity   # vendored Argon2id 与 noble 的生产参数交叉对照
 # 浏览器测试需另装 playwright==1.64.1 与 Chromium：
 python3 -m pip install playwright==1.64.1

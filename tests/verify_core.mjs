@@ -5,6 +5,7 @@
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { argon2id } from '@noble/hashes/argon2.js';
+import { expand } from '@noble/hashes/hkdf.js';
 import { loadCore, cryptoProbe } from './helpers/load-core.mjs';
 
 let checks = 0;
@@ -140,6 +141,27 @@ for (const fault of ['sign','digest','HKDF-import','deriveBits']) {
     stream.dispose();
     check(zero(second)&&zero(info),'dispose clears current block and info');
     check(stream.ikmKey===null,'dispose drops native CryptoKey reference');
+}
+// Long-info HKDF must skip native dispatch and wipe the noble PRK and prefixes.
+{
+    const prefixes = [];
+    const f = fixture({ hkdfExpand: (...args) => {
+        const raw = expand(...args);
+        prefixes.push(raw);
+        return raw;
+    } });
+    const info = new Uint8Array(1025).fill(3), stream = new f.HkdfStream(info);
+    await stream.init(new Uint8Array(32).fill(7));
+    const prk = stream.prk;
+    await stream.uniformInt(256);
+    const first = stream.buf;
+    for (let i = 0; i < 32; i++) await stream.uniformInt(256);
+    const second = stream.buf;
+    check(f.state.rawBlocks.length === 0 && stream.ikmKey === null, 'long info never uses native HKDF');
+    check(!zero(prk) && zero(first), 'PRK lives across refills but replaced suffix is cleared');
+    check(prefixes.length === 2 && prefixes.every(zero), 'noble HKDF expansion prefixes are cleared');
+    stream.dispose();
+    check(zero(prk) && zero(info) && zero(second) && stream.prk === null, 'dispose wipes long-info stream state');
 }
 {
     const f=fixture();const e=f.spv2CoreFactory(null,false);
