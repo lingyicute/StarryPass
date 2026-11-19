@@ -227,7 +227,8 @@
         .app-bar {
             width: 100%;
             margin: 0 auto;
-            padding: max(20px, env(safe-area-inset-top)) 20px 8px;
+            /* viewport-fit=cover: keep clear of side cutouts in landscape as well */
+            padding: max(20px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) 8px max(20px, env(safe-area-inset-left));
             display: flex;
             align-items: center;
             gap: 16px;

@@ -823,6 +823,19 @@ async def test_narrow_field_labels(browser, url):
     print('PASS browser: narrow-viewport field labels')
 
 
+async def test_landscape_safe_area(browser, url):
+    context, page = await mock_page(browser, url)
+    try:
+        cdp = await context.new_cdp_session(page)
+        await cdp.send('Emulation.setSafeAreaInsetsOverride', {'insets': {'left': 47, 'right': 47}})
+        padding = await page.evaluate("""() => { const style = getComputedStyle(document.querySelector('.app-bar'));
+            return [parseFloat(style.paddingLeft), parseFloat(style.paddingRight)]; }""")
+        check(min(padding) >= 47, 'app bar clears landscape display cutouts')
+    finally:
+        await context.close()
+    print('PASS browser: landscape safe-area insets')
+
+
 async def test_malformed_results(browser, url):
     # Worker transport success is a strict boolean; output must match the
     # requested ASCII pool/length. These are fault injections, not assertions
@@ -1131,6 +1144,7 @@ async def main():
                     await test_counter_accessible_name(browser, url)
                     await test_forced_colors(browser, url)
                     await test_narrow_field_labels(browser, url)
+                    await test_landscape_safe_area(browser, url)
                     await test_counter_not_restored(browser, url, state)
                     await test_theme_first_paint_and_system_follow(browser, url)
                     await test_theme_without_storage(browser, url)
