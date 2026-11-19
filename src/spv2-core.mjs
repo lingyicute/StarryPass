@@ -112,22 +112,6 @@ function writeLE16(out, offset, val) {
     out[offset + 1] = (val >>> 8) & 0xff;
 }
 
-function concatBytes(arrays) {
-    let total = 0;
-    for (const a of arrays) total += a.length;
-    const out = new Uint8Array(total);
-    let pos = 0;
-    for (const a of arrays) { out.set(a, pos); pos += a.length; }
-    return out;
-}
-
-function lenPrefixed(bytes) {
-    const out = new Uint8Array(4 + bytes.length);
-    writeLE32(out, 0, bytes.length);
-    out.set(bytes, 4);
-    return out;
-}
-
 /* ------------------------------------------------------------------ *
  * Mature primitives                                                   *
  * ------------------------------------------------------------------ */
@@ -280,18 +264,16 @@ function startArgon2id({ password, salt, ad, memoryKiB, passes, parallelism, tag
  * ------------------------------------------------------------------ */
 
 async function buildSalt(codeBytes, tierId) {
-    let tierByte, codeFrame, saltIn;
+    const codeLenOffset = DOMAIN_SALT.length;
+    const saltIn = new Uint8Array(codeLenOffset + 4 + codeBytes.length + 1);
     try {
-        tierByte = new Uint8Array([tierId]);
-        codeFrame = lenPrefixed(codeBytes);
-        saltIn = concatBytes([DOMAIN_SALT, codeFrame, tierByte]);
-        zeroize(codeFrame);
-        zeroize(tierByte);
+        saltIn.set(DOMAIN_SALT);
+        writeLE32(saltIn, codeLenOffset, codeBytes.length);
+        saltIn.set(codeBytes, codeLenOffset + 4);
+        saltIn[saltIn.length - 1] = tierId;
         return await sha256(saltIn);
     } finally {
         zeroize(saltIn);
-        zeroize(codeFrame);
-        zeroize(tierByte);
     }
 }
 
@@ -392,16 +374,16 @@ class HkdfStream {
 
 async function synthesizePassword(sk, codeBytes, counter, length, modeName) {
     const modeSpec = Object.prototype.hasOwnProperty.call(MODES, modeName) ? MODES[modeName] : MODES.full;
-    const meta = new Uint8Array(7);
-    writeLE32(meta, 0, counter >>> 0);
-    writeLE16(meta, 4, length & 0xffff);
-    meta[6] = modeSpec.id;
-    let codeFrame, info, stream;
+    const metaOffset = DOMAIN_EXPAND.length, codeLenOffset = metaOffset + 7;
+    let info, stream;
     try {
-        codeFrame = lenPrefixed(codeBytes);
-        info = concatBytes([DOMAIN_EXPAND, meta, codeFrame]);
-        zeroize(codeFrame);
-        zeroize(meta);
+        info = new Uint8Array(codeLenOffset + 4 + codeBytes.length);
+        info.set(DOMAIN_EXPAND);
+        writeLE32(info, metaOffset, counter >>> 0);
+        writeLE16(info, metaOffset + 4, length & 0xffff);
+        info[metaOffset + 6] = modeSpec.id;
+        writeLE32(info, codeLenOffset, codeBytes.length);
+        info.set(codeBytes, codeLenOffset + 4);
         stream = new HkdfStream(info, Math.ceil(length / 32));
         await stream.init(sk);
         const pool = modeSpec.pool;
@@ -447,9 +429,7 @@ async function synthesizePassword(sk, codeBytes, counter, length, modeName) {
         return result;
     } finally {
         if (stream) stream.dispose();
-        zeroize(info);
-        zeroize(codeFrame);
-        zeroize(meta);
+        else zeroize(info);
     }
 }
 
