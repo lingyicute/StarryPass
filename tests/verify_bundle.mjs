@@ -3,6 +3,7 @@
  * original vectors through it. Guards against build/bundling drift.
  */
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,6 +27,16 @@ if (typeof WorkerGlobalScope !== 'undefined') {
     process.exit(1);
 }
 console.log('PASS bundle exposes spv2CoreFactory');
+
+// The vendored provider ships inside the bundle: its recorded checksum must
+// change together with the file.
+const vendorDir = path.join(here, '..', 'vendor', 'hash-wasm');
+const vendorHash = createHash('sha256').update(fs.readFileSync(path.join(vendorDir, 'argon2.umd.min.cjs'))).digest('hex');
+if (!fs.readFileSync(path.join(vendorDir, 'PROVENANCE.md'), 'utf8').includes('`' + vendorHash + '`')) {
+    console.error(`FAIL: PROVENANCE.md does not record the vendored SHA-256 ${vendorHash}`);
+    process.exit(1);
+}
+console.log('PASS vendored hash-wasm matches its recorded SHA-256');
 
 // The shipped IIFE must also fail closed on silent primitive corruption. Give
 // each case a fresh module state so a successful KAT cannot mask later faults.

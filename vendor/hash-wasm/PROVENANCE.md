@@ -12,6 +12,8 @@ required by the StarryPass v2 H0 framing.
   The WASM binary inside is byte-identical to the published
   `hash-wasm@4.12.0` npm package (SHA-verified during extraction) —
   the patch is TypeScript-only and never touches the binary.
+- SHA-256 of `argon2.umd.min.cjs` (checked by `tests/verify_bundle.mjs`):
+  `f9b2abc98eac56a458e21ad6abefcde7d2ae3c39daaf817f5bf3556adf1d4d0a`
 - License: MIT (see LICENSE in this directory).
 - Verification: `npm run test:parity` proves byte-identical Argon2id
   output vs @noble/hashes on production parameters, and the runtime
