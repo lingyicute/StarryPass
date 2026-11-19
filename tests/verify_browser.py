@@ -810,6 +810,19 @@ async def test_service_worker(browser, url, site, state):
     print('PASS browser: HTTPS service-worker update, query aliases, offline derivation and HTTP 503')
 
 
+async def test_narrow_field_labels(browser, url):
+    context, page = await mock_page(browser, url)
+    try:
+        await page.set_viewport_size({'width': 280, 'height': 650})
+        check(await page.evaluate("""() => [...document.querySelectorAll('.field')].every((field) =>
+            field.querySelector('.field__label').getBoundingClientRect().bottom
+                <= field.querySelector('.field__input').getBoundingClientRect().bottom)"""),
+              'placeholder labels stay inside their fields on a 280px viewport')
+    finally:
+        await context.close()
+    print('PASS browser: narrow-viewport field labels')
+
+
 async def test_malformed_results(browser, url):
     # Worker transport success is a strict boolean; output must match the
     # requested ASCII pool/length. These are fault injections, not assertions
@@ -1117,6 +1130,7 @@ async def main():
                     await test_copy_and_theme(browser, url)
                     await test_counter_accessible_name(browser, url)
                     await test_forced_colors(browser, url)
+                    await test_narrow_field_labels(browser, url)
                     await test_counter_not_restored(browser, url, state)
                     await test_theme_first_paint_and_system_follow(browser, url)
                     await test_theme_without_storage(browser, url)

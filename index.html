@@ -358,6 +358,11 @@
             position: absolute;
             left: 52px;
             top: 19px;
+            /* one line only: on very narrow screens a wrapped label would spill below the field */
+            max-width: calc(100% - 64px);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
             font-size: 16px;
             color: var(--md-sys-color-on-surface-variant);
             pointer-events: none;
