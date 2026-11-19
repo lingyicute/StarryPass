@@ -568,6 +568,10 @@ async def test_counter_accessible_name(browser, url):
     try:
         check(await page.get_by_role('spinbutton', name='轮换序号').count() == 1,
               'counter number input exposes an accessible name')
+        policy = await page.locator('#policy').aria_snapshot()
+        arrow = await page.evaluate("getComputedStyle(document.querySelector('#policy > summary'), '::after').content")
+        check('站点策略' in policy and '▴' not in policy and arrow.startswith('"▴"'),
+              'policy disclosure arrow is rendered but kept out of the accessible name')
     finally:
         await context.close()
     print('PASS browser: counter input accessible name')

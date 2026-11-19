@@ -685,8 +685,9 @@
             gap: 8px;
         }
         .policy > summary::-webkit-details-marker { display: none; }
-        .policy > summary::after { content: "▾"; opacity: .55; }
-        .policy[open] > summary::after { content: "▴"; }
+        /* decorative: empty alternative text keeps the arrow out of the accessible name; the plain declaration is the fallback */
+        .policy > summary::after { content: "▾"; content: "▾" / ""; opacity: .55; }
+        .policy[open] > summary::after { content: "▴"; content: "▴" / ""; }
         .policy__body { padding: 0 16px 16px; display: flex; flex-direction: column; gap: 14px; }
         .policy__label { font-size: 12px; font-weight: 500; letter-spacing: .4px; color: var(--md-sys-color-on-surface-variant); margin-bottom: 6px; }
         .chips { display: flex; flex-wrap: wrap; gap: 8px; }
